@@ -180,7 +180,7 @@ class RecognizeWorker(multiprocessing.Process):
         print("notice start capture %s" % time.time())
         self.get_left_armband_obj().vibrate(VibrationType.short)
         print("end of notice , 0.15s gap %s" % time.time())
-        time.sleep(0.2)
+        time.sleep(0.35)
         print("capture start at: %s" % time.time())
         cap_start_time = time.time()
         sign_start_time = time.time()
@@ -188,14 +188,15 @@ class RecognizeWorker(multiprocessing.Process):
             current_time = time.time()
             # 只有当采集到达末尾时才开始检查数据长度是否满足
             # 减少采集时的无关操作
-            if current_time - sign_start_time > 1.50:
+            if current_time - sign_start_time > 1.450:
                 if self.is_data_length_satisfied():
                     # 满足长度后跳出采集循环
                     self.get_left_armband_obj().vibrate(VibrationType.short)
-                    time.sleep(0.15)
+                    time.sleep(0.1)
                     self.get_left_armband_obj().vibrate(VibrationType.short)
                     print("capture ended at : %s" % time.time())
                     break
+            #         todo ????延迟
             if (current_time - cap_start_time) >= self._t_s:
                 cap_start_time = time.time()
                 # if not self.is_armbands_sync():
@@ -266,17 +267,9 @@ class RecognizeWorker(multiprocessing.Process):
             max_abs_scaler = sklearn.preprocessing.MaxAbsScaler()
             max_abs_scaler.scale_ = SCALE_DATA
 
-            # 出错的位置
-            # try:
             norm_online_feat = max_abs_scaler.transform(Combined_fea_list)
             res = int(CLF.predict([norm_online_feat[0, :]]))
-            # if res != 3:
-            #     return self.get_next_word()
-            # else:
             return res
-            # except:
-            #     print("predict failed")
-            #     return random.randint(0, 10)
         else:
             # rnn 识别模式
             acc_data = feature_extract_single(self.online_ACC_feat, 'acc')
@@ -302,12 +295,10 @@ class RecognizeWorker(multiprocessing.Process):
             target_script_dir = CURR_WORK_DIR + '\\rnn_recognize.py'
 
             command = '%s %s %s' % (target_python_dir, target_script_dir, data_file_name)
-            p = os.popen(command)
-            res = p.readlines()
-            res = int(res[0].strip('\n'))
-            print(res)
-            # print('recognize_res : %d' % res)
-            return int(res)
+            res = os.system(command)
+            print(res)  # print('recognize_res : %d' % res)
+
+            return res
 
     def get_left_armband_obj(self):
         return self.paired_armbands[0]

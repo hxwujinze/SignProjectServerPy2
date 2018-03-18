@@ -63,7 +63,7 @@ if __name__ == '__main__':
 
     data_path = CURR_WORK_DIR + '\\' + args.source
     data_file = open(data_path, 'r+b')
-    data_mat = pickle.load(data_file)
+    data_mat = pickle.load(data_file, encoding='iso-8859-1')
     data_file.close()
     os.remove(data_path)
 
@@ -72,6 +72,6 @@ if __name__ == '__main__':
     output = rnn_model(data_mat)
     res = getMaxIndex(output)[0]
 
-    print(str(res))
+    # print(str(res))
 
     sys.exit(res)

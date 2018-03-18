@@ -2,7 +2,6 @@
 import os
 import pickle
 import threading
-import time
 
 from django.db import models
 
@@ -10,7 +9,7 @@ GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '�
                   '老师 ', '发烧 ', '谢谢 ', '']
 
 access_lock = threading.RLock()
-CURR_WORK_DIR = os.path.dirname(__file__) + '\\models_data\\'
+CURR_DATA_DIR = os.path.dirname(__file__) + '\\models_data\\'
 
 # Create your models here.
 class SignRecognizeHistory(models.Model):
@@ -94,7 +93,7 @@ class RecognizeInfo:
 def get_latest_sign_id():
     # 查询数据库获取当前序号
     access_lock.acquire()
-    file_ = open(CURR_WORK_DIR + 'latest_sign_id', 'rb')
+    file_ = open(CURR_DATA_DIR + 'latest_sign_id', 'r+b')
     latest_sign_id = pickle.load(file_)
     file_.close()
     access_lock.release()
@@ -104,7 +103,7 @@ def acquire_latest_sign_id():
     access_lock.acquire()
     latest_sign_id = int(get_latest_sign_id())
     latest_sign_id = latest_sign_id + 1
-    file_ = open(CURR_WORK_DIR + 'latest_sign_id', 'w+b')
+    file_ = open(CURR_DATA_DIR + 'latest_sign_id', 'w+b')
     pickle.dump(latest_sign_id, file_)
     file_.close()
     access_lock.release()
@@ -136,7 +135,7 @@ def pickle_cap_data2file():
     # 最后获得的列表是
     # [ (sign_id , 数据的字典 ) , .... ]
 
-    file = open(CURR_WORK_DIR + 'feedback_data_', 'w+b')
+    file = open(CURR_DATA_DIR + 'feedback_data_', 'w+b')
     pickle.dump(data_list, file)
     file.close()
 
