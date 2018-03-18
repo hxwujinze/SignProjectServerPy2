@@ -1,0 +1,441 @@
+# coding:utf-8
+import multiprocessing
+import os
+import pickle
+import random
+import time
+
+import numpy as np
+import sklearn
+from myo.lowlevel import VibrationType
+from sklearn.externals import joblib
+
+from . import armbands_manager
+from .utilities_classes import Message
+
+armbands_manager.update_connected_list()
+
+GESTURE_SIZE = 160
+WINDOW_SIZE = 16
+MAX_CAPTURE_TIME = 60
+
+RNN_STATE = 566
+SVM_STATE = 852
+
+CURR_CLASSIFY_STATE = RNN_STATE
+
+CURR_WORK_DIR = os.path.join(os.getcwd(), 'utilities_access')
+CURR_DATA_DIR = CURR_WORK_DIR + '\\models_data'
+
+# todo 这里键入python3路径 for pytroch运行
+PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
+
+SCALE_DATA = np.loadtxt(CURR_DATA_DIR + "\\scale.txt")
+
+file = open(CURR_DATA_DIR + '\\scale_rnn', 'r+b')
+SCALE_RNN = pickle.load(file)
+file.close()
+
+# 这里将模型装载进来
+CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
+
+TYPE_LEN = {
+    'acc': 3,
+    'gyr': 3,
+    'emg': 8
+}
+CAP_TYPE_LIST = ['acc', 'emg', 'gyr']
+
+GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',
+                  '老师 ', '发烧 ', '谢谢 ', '']
+# [ '肉 ', '鸡蛋 ','喜欢 ','您好 ','你 ','什么 ', '想 ','我 ', '很 ', '吃 ',
+#                   '老师 ' ,'发烧 ' ,'谢谢 ', '']
+
+
+queue_lock = multiprocessing.Lock()
+
+"""
+手语识别工作线程
+每次识别中 手环的连接时间是唯一的 几乎不会冲突
+在没有其他可用的硬件唯一标识符时 连接时间可以代替使用
+"""
+
+class RecognizeWorker(multiprocessing.Process):
+    def __init__(self, message_q,
+                 armbands_timetag,
+                 event):
+        multiprocessing.Process.__init__(self, name='RecognizeWorker')
+        print('RecognizeWorker created')
+        # 接受识别结果的主线程
+        self.message_q = message_q
+        # 已经匹配 要作为识别数据源的手环对象
+        print('armbands_list timestamp: ' + str(armbands_manager.connect_time_obj_map))
+
+        self.paired_armbands = armbands_timetag
+
+        # event用于终止线程
+        self.outer_event = event
+        # status用于设置是否进行手语识别工作
+        # set时进行识别 unset时不识别 初始是unset
+        self.recognize_status = multiprocessing.Event()
+        # 对象管道 用于传递手环对象
+
+        # 手环数据采集周期
+        self._t_s = 0.01
+        self.online_EMG_feat = np.array([0])
+        self.online_ACC_feat = np.array([0])
+        self.online_GYR_feat = np.array([0])
+
+    #  setting start recognize flag
+    def start_recognize(self):
+        self.recognize_status.set()
+
+    def stop_recognize(self):
+        self.recognize_status.clear()
+
+    def _stop_recognize(self, stop_type):
+        self.recognize_status.clear()
+        # 向主线程发送消息 通知已经停止手语识别了
+        msg = Message(control='stop_recognize', data={"type": stop_type})
+        self.put_message_into_queue(msg)
+        # for armband in self.target_armband:
+        #     armband.lock()
+
+    """
+    向主线程消息队列中添加消息的方法 多线程数据访问需要加锁解锁
+    该方法封装了这一过程
+    """
+
+    def put_message_into_queue(self, message):
+        global queue_lock
+        queue_lock.acquire(True)
+        # print("put msg in queue : %s " % message)
+        self.message_q.put(message)
+        queue_lock.release()
+
+    """
+    震动两下开始手语识别
+    两下后会有个0.5s的gap 作为人的反应时间 
+    震动一下结束采集
+    """
+
+    def run(self):
+        armbands_timetag = self.paired_armbands
+        self.paired_armbands = []
+        for each in armbands_timetag:
+            self.paired_armbands.append(armbands_manager.connect_time_obj_map[each])
+
+        while not self.outer_event.is_set():
+            # 外层循环  判断是否启动识别
+            if self.recognize_status.is_set():
+                print('RecognizeWorker start recognize')
+                start_time = time.time()
+                curr_time = start_time
+
+                # for armband in self.target_armband:
+                #     armband.unlock()
+
+                while self.recognize_status.is_set():
+                    # 判断是否超时 每次手语采集具有时间限制 超时后停止手语采集
+                    if curr_time - start_time > MAX_CAPTURE_TIME:
+                        # 超时后停止识别工作
+                        print("sign capture timeout , quiting")
+                        self._stop_recognize("timeout")
+                        # 返回外层循环进行等待
+                        break
+                    curr_time = time.time()
+                    # 开始采集手语
+                    self.capture_sign()
+                    print("sign captured , starting recognizing ")
+                    # 采集完成后根据采集的数据进行识别 采集方法返回手语结果的序号
+                    sign_index = self.recognize_sign()
+                    if self.recognize_status.is_set():
+                        print("recognizing complete")
+                        # 保存识别时采集的手环数据
+                        raw_capture_data = {
+                            'acc': self.online_ACC_feat,
+                            'emg': self.online_EMG_feat,
+                            'gyr': self.online_GYR_feat
+                        }
+
+                        data = {
+                            'res_text': GESTURES_TABLE[sign_index],
+                            'middle_symbol': sign_index,
+                            'raw_data': raw_capture_data
+                        }
+                        # 向主线程返回识别的结果
+                        msg = Message(control='append_recognize_result',
+                                      data=data)
+                        self.put_message_into_queue(msg)
+                        print("a sign capturing and recognizing complete")
+        print("recognize thread stopped")
+
+    """
+    采集足够长度的手语数据进行识别
+    """
+
+    # 如果采集过程中手环失联 会导致线程阻塞
+    def capture_sign(self):
+        self.init_data()
+        print("notice start capture %s" % time.time())
+        self.get_left_armband_obj().vibrate(VibrationType.short)
+        print("end of notice , 0.15s gap %s" % time.time())
+        time.sleep(0.2)
+        print("capture start at: %s" % time.time())
+        cap_start_time = time.time()
+        sign_start_time = time.time()
+        while True:
+            current_time = time.time()
+            # 只有当采集到达末尾时才开始检查数据长度是否满足
+            # 减少采集时的无关操作
+            if current_time - sign_start_time > 1.50:
+                if self.is_data_length_satisfied():
+                    # 满足长度后跳出采集循环
+                    self.get_left_armband_obj().vibrate(VibrationType.short)
+                    time.sleep(0.15)
+                    self.get_left_armband_obj().vibrate(VibrationType.short)
+                    print("capture ended at : %s" % time.time())
+                    break
+            if (current_time - cap_start_time) >= self._t_s:
+                cap_start_time = time.time()
+                # if not self.is_armbands_sync():
+                #     print("armband didn't sync")
+                #     self._stop_recognize("unsync")
+                #     return
+                if len(self.paired_armbands) == 1:
+                    myo_obj = self.get_left_armband_obj().myo_obj
+                    Emg = myo_obj.emg
+                    Acc = [it for it in myo_obj.acceleration]
+                    Gyr = [it for it in myo_obj.gyroscope]
+                else:
+                    myo_left_hand = self.get_left_armband_obj().myo_obj
+                    myo_right_hand = self.get_right_armband_obj().myo_obj
+                    # 根据myoProxy获取数据 双手直接通过列表拼接处理即可
+                    Emg = myo_left_hand.emg + myo_right_hand.emg
+                    Acc = [it for it in myo_left_hand.acceleration] \
+                          + [it for it in myo_right_hand.acceleration]
+                    Gyr = [it for it in myo_left_hand.gyroscope] \
+                          + [it for it in myo_right_hand.gyroscope]
+
+                self.online_GYR_feat = vstack_data(self.online_GYR_feat, Gyr)
+                self.online_ACC_feat = vstack_data(self.online_ACC_feat, Acc)
+                self.online_EMG_feat = vstack_data(self.online_EMG_feat, Emg)
+
+    # 每次开始采集数据时用于初始化数据集
+    def init_data(self):
+        self.online_EMG_feat = np.array([0])
+        self.online_ACC_feat = np.array([0])
+        self.online_GYR_feat = np.array([0])
+
+    def is_data_length_satisfied(self):
+        return len(self.online_EMG_feat) == GESTURE_SIZE and \
+               len(self.online_ACC_feat) == GESTURE_SIZE and \
+               len(self.online_GYR_feat) == GESTURE_SIZE
+
+    def is_armbands_sync(self):
+        if len(self.paired_armbands) == 1:
+            return self.get_left_armband_obj().is_sync
+        else:
+            return self.get_left_armband_obj().is_sync and \
+                   self.get_right_armband_obj().is_sync
+
+    # 识别手语
+    def recognize_sign(self):
+        # 如果已经设置为结束识别了 就不进行识别操作
+        if not self.recognize_status.is_set():
+            return
+        if CURR_CLASSIFY_STATE == SVM_STATE:
+
+            ACC_ges_fea = online_fea_extraction(self.online_ACC_feat[0:GESTURE_SIZE, 0:3],
+                                                WINDOW_SIZE,
+                                                GESTURE_SIZE, 3)
+            GYR_ges_fea = online_fea_extraction(self.online_GYR_feat[0:GESTURE_SIZE, 0:3],
+                                                WINDOW_SIZE,
+                                                GESTURE_SIZE, 3)
+
+            EMG_ges_fea = online_fea_extraction(self.online_EMG_feat[0:GESTURE_SIZE, 0:8],
+                                                WINDOW_SIZE,
+                                                GESTURE_SIZE, 8)
+
+            # 进行预测并输出手势的序号
+
+            Combined_fea_list = np.hstack((EMG_ges_fea, ACC_ges_fea, GYR_ges_fea))
+            Combined_fea_list_tmp = Combined_fea_list
+            Combined_fea_list = np.vstack((Combined_fea_list, Combined_fea_list_tmp))
+
+            max_abs_scaler = sklearn.preprocessing.MaxAbsScaler()
+            max_abs_scaler.scale_ = SCALE_DATA
+
+            # 出错的位置
+            # try:
+            norm_online_feat = max_abs_scaler.transform(Combined_fea_list)
+            res = int(CLF.predict([norm_online_feat[0, :]]))
+            # if res != 3:
+            #     return self.get_next_word()
+            # else:
+            return res
+            # except:
+            #     print("predict failed")
+            #     return random.randint(0, 10)
+        else:
+            # rnn 识别模式
+            acc_data = feature_extract_single(self.online_ACC_feat, 'acc')
+            gyr_data = feature_extract_single(self.online_GYR_feat, 'gyr')
+            emg_data = feature_extract_single(self.online_EMG_feat, 'emg')
+            # 选取三种特性拼接后的结果
+            acc_data_appended = acc_data[3]
+            gyr_data_appended = gyr_data[3]
+            emg_data_appended = emg_data[3]
+            # 再将三种采集类型进行拼接
+            data_mat = append_single_data_feature(acc_data=acc_data_appended,
+                                                  gyr_data=gyr_data_appended,
+                                                  emg_data=emg_data_appended)
+
+            data_id = random.randint(222, 9999999)
+            data_file_name = str(data_id) + '.data'
+            data_path = CURR_WORK_DIR + '\\' + data_file_name
+            file_ = open(data_path, 'w+b')
+            pickle.dump(data_mat, file_)
+            file_.close()
+
+            target_python_dir = PYTORCH_INTP_PATH
+            target_script_dir = CURR_WORK_DIR + '\\rnn_recognize.py'
+
+            command = '%s %s %s' % (target_python_dir, target_script_dir, data_file_name)
+            p = os.popen(command)
+            res = p.readlines()
+            res = int(res[0].strip('\n'))
+            print(res)
+            # print('recognize_res : %d' % res)
+            return int(res)
+
+    def get_left_armband_obj(self):
+        return self.paired_armbands[0]
+
+    def get_right_armband_obj(self):
+        return self.paired_armbands[1]
+
+def vstack_data(target, step_data):
+    step_data = np.array(step_data)
+    if target.any() == 0:
+        # 第一步 如果为空 直接赋值
+        target = step_data
+    else:
+        # >1 步时则是使用np.vstack 将新的数据追加为矩阵新的维度
+        target = np.vstack((target, step_data))
+    return target
+
+def online_fea_extraction(online_feat, window_size, gesture_size, width_data):
+    # 这里意思大概是要将整个手语数据分成一个一个window的去跑匹配
+    split_size = gesture_size / window_size
+    window_samples = np.vsplit(online_feat, split_size)
+    # 由于每次采集的数据是以矩阵叠加向量的方式存储的
+    # vsplit是vstack的逆过程 他将矩阵"横向"进行拆分成一个个小矩阵
+    RMS_feat_level = np.zeros((1, 3))
+    ZC_feat_level = np.zeros((1, 3))
+    ARC_feat_level = np.zeros((1, 4))
+    window_index = 0
+    for window_piece in window_samples:
+        RMS_feat = np.mean(np.sqrt(np.square(window_piece)), axis=0)
+
+        arg_1 = window_piece[1::, :]
+        arg_2 = np.zeros((1, width_data))
+
+        piece_move1 = np.vstack((arg_1, arg_2))
+        ZC_feat = np.sum((-np.sign(window_piece) * np.sign(piece_move1) + 1) / 2, axis=0)
+        ARC_feat = np.apply_along_axis(ARC3ord, 0, window_piece)
+        # 在这里也是迭代
+        if window_index == 0:
+            RMS_feat_level = RMS_feat
+            ZC_feat_level = ZC_feat
+            ARC_feat_level = ARC_feat
+        else:
+            RMS_feat_level = np.vstack((RMS_feat_level, RMS_feat))
+            ZC_feat_level = np.vstack((ZC_feat_level, ZC_feat))
+            ARC_feat_level = np.vstack((ARC_feat_level, ARC_feat))
+        window_index += 1
+    temp_gest_sample_feat = np.vstack((RMS_feat_level, ZC_feat_level, ARC_feat_level))
+    get_gest_feat = temp_gest_sample_feat.T.ravel()
+    return get_gest_feat
+
+# #################### rnn  sector ##############
+
+def feature_extract_single(data, type_name):
+    """
+    根据数据类型进行特征提取
+    并将特征进行拼接
+    :param data: 数据
+    :param type_name: 数据类型
+    :return: 特征元组
+    """
+    window_amount = len(data) / WINDOW_SIZE
+    windows_data = np.vsplit(data, window_amount)
+    win_index = 0
+    is_first = True
+    seg_all_feat = []
+    seg_ARC_feat = []
+    seg_RMS_feat = []
+    seg_ZC_feat = []
+
+    for Win_Data in windows_data:
+        # 依次处理每个window的数据
+        win_RMS_feat = np.sqrt(np.mean(np.square(Win_Data), axis=0))
+        Win_Data1 = np.vstack((Win_Data[1:, :], np.zeros((1, TYPE_LEN[type_name]))))
+        win_ZC_feat = np.sum(np.sign(-np.sign(Win_Data) * np.sign(Win_Data1) + 1), axis=0) - 1
+        win_ARC_feat = np.apply_along_axis(ARC3ord, 0, Win_Data)
+        # 将每个window特征提取的数据用vstack叠起来
+        if win_index == 0:
+            seg_RMS_feat = win_RMS_feat
+            seg_ZC_feat = win_ZC_feat
+            seg_ARC_feat = win_ARC_feat
+        else:
+            seg_RMS_feat = np.vstack((seg_RMS_feat, win_RMS_feat))
+            seg_ZC_feat = np.vstack((seg_ZC_feat, win_ZC_feat))
+            seg_ARC_feat = np.vstack((seg_ARC_feat, win_ARC_feat))
+        win_index += 1
+
+        # 将三种特征拼接成一个长向量
+        # 层叠 转置 遍历展开
+        Seg_Feat = np.vstack((win_RMS_feat, win_ZC_feat, win_ARC_feat))
+        All_Seg_Feat = Seg_Feat.T.ravel()
+
+        if is_first:
+            is_first = False
+            seg_all_feat = All_Seg_Feat
+        else:
+            seg_all_feat = np.vstack((seg_all_feat, All_Seg_Feat))
+    return seg_ARC_feat, seg_RMS_feat, seg_ZC_feat, seg_all_feat
+
+def append_single_data_feature(acc_data, gyr_data, emg_data):
+    """
+    拼接三种数据并归一化
+    :param acc_data: 。。
+    :param gyr_data: 。。
+    :param emg_data: 。。
+    :return: 直接可供rnn使用的矩阵
+    """
+    batch_mat = np.zeros(len(acc_data))
+    is_first = True
+    for each_window in range(len(acc_data)):
+        # 针对每个识别window
+        # 把这一次采集的三种数据采集类型进行拼接
+        line = np.append(acc_data[each_window], gyr_data[each_window])
+        line = np.append(line, emg_data[each_window])
+        if is_first:
+            is_first = False
+            batch_mat = line
+        else:
+            batch_mat = np.vstack((batch_mat, line))
+    scale_data_block(batch_mat)
+    return batch_mat
+
+# normalize
+def scale_data_block(data_block):
+    for each_line in data_block:
+        for each_feat_dim in range(len(SCALE_RNN)):
+            each_line[each_feat_dim] /= SCALE_RNN[each_feat_dim]
+
+def ARC3ord(Orin_Array):
+    t_value = len(Orin_Array)
+    AR_coeffs = np.polyfit(range(t_value), Orin_Array, 3)
+    return AR_coeffs
