@@ -1,7 +1,6 @@
 # coding:utf-8
 import json
 import multiprocessing
-import os
 import socket
 import threading
 import time
@@ -198,7 +197,6 @@ class MainWorkerThread(threading.Thread):
     """
 
     def send_message(self, info):
-        print("sending message %s" % info)
         info_str = json.dumps(info, indent=2)
         info_str += "$"
         # 总是使用 $ 作为每次消息的结尾

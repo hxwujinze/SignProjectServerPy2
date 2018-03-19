@@ -116,7 +116,7 @@ def store_capture_feedback(capture_id, correctness):
     single_signs = SingleSignCapture.objects.filter(sign_sentence_belong_id=int(capture_id))
     single_signs.update(correctness=True)
 
-specified_sign_id = 4
+
 
 def pickle_cap_data2file():
     # 根据手势获取数据
@@ -130,8 +130,10 @@ def pickle_cap_data2file():
 
     # 获取全部数据 不含手势内容
     # 适用于测试环境
+    specified_sign_id = 5
     sign_history_items = SingleSignCapture.objects.all()
     data_list = [parse_data(sign_history_items, sign_id=specified_sign_id)]
+    sign_history_items.delete()
     # 最后获得的列表是
     # [ (sign_id , 数据的字典 ) , .... ]
 

@@ -16,6 +16,8 @@ from .utilities_classes import Message
 armbands_manager.update_connected_list()
 
 GESTURE_SIZE = 160
+CAPTURE_SIZE = 160
+
 WINDOW_SIZE = 16
 MAX_CAPTURE_TIME = 60
 
@@ -82,9 +84,10 @@ class RecognizeWorker(multiprocessing.Process):
 
         # 手环数据采集周期
         self._t_s = 0.01
-        self.online_EMG_feat = np.array([0])
-        self.online_ACC_feat = np.array([0])
-        self.online_GYR_feat = np.array([0])
+        self.EMG_captured_data = np.array([0])
+        self.ACC_captured_data = np.array([0])
+        self.GYR_captured_data = np.array([0])
+        self.each_capture_gap = []
 
     #  setting start recognize flag
     def start_recognize(self):
@@ -153,9 +156,9 @@ class RecognizeWorker(multiprocessing.Process):
                         print("recognizing complete")
                         # 保存识别时采集的手环数据
                         raw_capture_data = {
-                            'acc': self.online_ACC_feat,
-                            'emg': self.online_EMG_feat,
-                            'gyr': self.online_GYR_feat
+                            'acc': self.ACC_captured_data,
+                            'emg': self.EMG_captured_data,
+                            'gyr': self.GYR_captured_data,
                         }
 
                         data = {
@@ -177,28 +180,28 @@ class RecognizeWorker(multiprocessing.Process):
     # 如果采集过程中手环失联 会导致线程阻塞
     def capture_sign(self):
         self.init_data()
-        print("notice start capture %s" % time.time())
         self.get_left_armband_obj().vibrate(VibrationType.short)
-        print("end of notice , 0.15s gap %s" % time.time())
-        time.sleep(0.35)
-        print("capture start at: %s" % time.time())
-        cap_start_time = time.time()
-        sign_start_time = time.time()
+        time.sleep(0.31)
+        print("capture start at: %s" % time.clock())
+        cap_start_time = time.clock()
+        sign_start_time = time.clock()
         while True:
-            current_time = time.time()
+            current_time = time.clock()
             # 只有当采集到达末尾时才开始检查数据长度是否满足
             # 减少采集时的无关操作
-            if current_time - sign_start_time > 1.450:
+            if current_time - sign_start_time > 1.5:
                 if self.is_data_length_satisfied():
                     # 满足长度后跳出采集循环
+                    print('each capture gap: ' + str(self.each_capture_gap))
                     self.get_left_armband_obj().vibrate(VibrationType.short)
                     time.sleep(0.1)
                     self.get_left_armband_obj().vibrate(VibrationType.short)
-                    print("capture ended at : %s" % time.time())
+                    print("capture ended at : %s" % time.clock())
                     break
-            #         todo ????延迟
-            if (current_time - cap_start_time) >= self._t_s:
-                cap_start_time = time.time()
+            gap_time = current_time - cap_start_time
+            if gap_time >= self._t_s:
+                self.each_capture_gap.append(gap_time)
+                cap_start_time = time.clock()
                 # if not self.is_armbands_sync():
                 #     print("armband didn't sync")
                 #     self._stop_recognize("unsync")
@@ -218,20 +221,21 @@ class RecognizeWorker(multiprocessing.Process):
                     Gyr = [it for it in myo_left_hand.gyroscope] \
                           + [it for it in myo_right_hand.gyroscope]
 
-                self.online_GYR_feat = vstack_data(self.online_GYR_feat, Gyr)
-                self.online_ACC_feat = vstack_data(self.online_ACC_feat, Acc)
-                self.online_EMG_feat = vstack_data(self.online_EMG_feat, Emg)
+                self.GYR_captured_data = vstack_data(self.GYR_captured_data, Gyr)
+                self.ACC_captured_data = vstack_data(self.ACC_captured_data, Acc)
+                self.EMG_captured_data = vstack_data(self.EMG_captured_data, Emg)
 
     # 每次开始采集数据时用于初始化数据集
     def init_data(self):
-        self.online_EMG_feat = np.array([0])
-        self.online_ACC_feat = np.array([0])
-        self.online_GYR_feat = np.array([0])
+        self.EMG_captured_data = np.array([0])
+        self.ACC_captured_data = np.array([0])
+        self.GYR_captured_data = np.array([0])
+        self.each_capture_gap = []
 
     def is_data_length_satisfied(self):
-        return len(self.online_EMG_feat) == GESTURE_SIZE and \
-               len(self.online_ACC_feat) == GESTURE_SIZE and \
-               len(self.online_GYR_feat) == GESTURE_SIZE
+        return len(self.EMG_captured_data) == CAPTURE_SIZE and \
+               len(self.ACC_captured_data) == CAPTURE_SIZE and \
+               len(self.GYR_captured_data) == CAPTURE_SIZE
 
     def is_armbands_sync(self):
         if len(self.paired_armbands) == 1:
@@ -247,14 +251,14 @@ class RecognizeWorker(multiprocessing.Process):
             return
         if CURR_CLASSIFY_STATE == SVM_STATE:
 
-            ACC_ges_fea = online_fea_extraction(self.online_ACC_feat[0:GESTURE_SIZE, 0:3],
+            ACC_ges_fea = online_fea_extraction(self.ACC_captured_data[0:GESTURE_SIZE, 0:3],
                                                 WINDOW_SIZE,
                                                 GESTURE_SIZE, 3)
-            GYR_ges_fea = online_fea_extraction(self.online_GYR_feat[0:GESTURE_SIZE, 0:3],
+            GYR_ges_fea = online_fea_extraction(self.GYR_captured_data[0:GESTURE_SIZE, 0:3],
                                                 WINDOW_SIZE,
                                                 GESTURE_SIZE, 3)
 
-            EMG_ges_fea = online_fea_extraction(self.online_EMG_feat[0:GESTURE_SIZE, 0:8],
+            EMG_ges_fea = online_fea_extraction(self.EMG_captured_data[0:GESTURE_SIZE, 0:8],
                                                 WINDOW_SIZE,
                                                 GESTURE_SIZE, 8)
 
@@ -272,9 +276,9 @@ class RecognizeWorker(multiprocessing.Process):
             return res
         else:
             # rnn 识别模式
-            acc_data = feature_extract_single(self.online_ACC_feat, 'acc')
-            gyr_data = feature_extract_single(self.online_GYR_feat, 'gyr')
-            emg_data = feature_extract_single(self.online_EMG_feat, 'emg')
+            acc_data = feature_extract_single(self.ACC_captured_data, 'acc')
+            gyr_data = feature_extract_single(self.GYR_captured_data, 'gyr')
+            emg_data = feature_extract_single(self.EMG_captured_data, 'emg')
             # 选取三种特性拼接后的结果
             acc_data_appended = acc_data[3]
             gyr_data_appended = gyr_data[3]
@@ -351,6 +355,19 @@ def online_fea_extraction(online_feat, window_size, gesture_size, width_data):
 
 # #################### rnn  sector ##############
 
+def adjust_data_length(A):
+    tail_len = len(A) - GESTURE_SIZE
+    if tail_len < 0:
+        print('Length Error')
+        A1 = A
+    else:
+        # 前后各去掉多出来长度的一半
+        End = len(A) - tail_len / 2
+        Begin = tail_len / 2
+        A1 = A[int(Begin):int(End), :]
+    return A1
+
+
 def feature_extract_single(data, type_name):
     """
     根据数据类型进行特征提取
@@ -359,6 +376,7 @@ def feature_extract_single(data, type_name):
     :param type_name: 数据类型
     :return: 特征元组
     """
+    data = adjust_data_length(data)
     window_amount = len(data) / WINDOW_SIZE
     windows_data = np.vsplit(data, window_amount)
     win_index = 0
