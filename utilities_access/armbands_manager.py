@@ -87,7 +87,6 @@ def get_armbands_list():
 更新已连接手环实例 根据手环对象的hash value进行判重
 同时会更新手环id与手环对象的dict
 """
-
 def armbands_list_find(target_list, elem):
     for each in target_list:
         if each.__cmp__(elem):
@@ -138,11 +137,10 @@ def occupy_armbands(working_thread, armbands_id):
 """
 释放手环
 """
-
 def release_armbands(working_thread):
     lock.acquire(True)
     print("release armbands %s" %
-          str(thread_armbands_pair_book[working_thread]))
+          thread_armbands_pair_book[working_thread].__str__())
     for each in thread_armbands_pair_book[working_thread]:
         each.is_occupy = False
     thread_armbands_pair_book[working_thread] = []
@@ -151,7 +149,6 @@ def release_armbands(working_thread):
 """
 获取当前线程占用的手环对象
 """
-
 def get_occupied_armbands(working_thread):
     return thread_armbands_pair_book[working_thread]
 

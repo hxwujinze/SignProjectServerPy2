@@ -11,6 +11,7 @@ from myo.lowlevel import VibrationType
 from sklearn.externals import joblib
 
 from . import armbands_manager
+from . import process_data
 from .utilities_classes import Message
 
 armbands_manager.update_connected_list()
@@ -34,9 +35,9 @@ PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Pyt
 
 SCALE_DATA = np.loadtxt(CURR_DATA_DIR + "\\scale.txt")
 
-file = open(CURR_DATA_DIR + '\\scale_rnn', 'r+b')
-SCALE_RNN = pickle.load(file)
-file.close()
+# file = open(CURR_DATA_DIR + '\\scale_rnn', 'r+b')
+# SCALE_RNN = pickle.load(file)
+# file.close()
 
 # 这里将模型装载进来
 CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
@@ -171,6 +172,7 @@ class RecognizeWorker(multiprocessing.Process):
                                       data=data)
                         self.put_message_into_queue(msg)
                         print("a sign capturing and recognizing complete")
+                        time.sleep(1)
         print("recognize thread stopped")
 
     """
@@ -192,7 +194,7 @@ class RecognizeWorker(multiprocessing.Process):
             if current_time - sign_start_time > 1.5:
                 if self.is_data_length_satisfied():
                     # 满足长度后跳出采集循环
-                    print('each capture gap: ' + str(self.each_capture_gap))
+                    # print('each capture gap: ' + str(self.each_capture_gap))
                     self.get_left_armband_obj().vibrate(VibrationType.short)
                     time.sleep(0.1)
                     self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -200,7 +202,7 @@ class RecognizeWorker(multiprocessing.Process):
                     break
             gap_time = current_time - cap_start_time
             if gap_time >= self._t_s:
-                self.each_capture_gap.append(gap_time)
+                # self.each_capture_gap.append(gap_time)
                 cap_start_time = time.clock()
                 # if not self.is_armbands_sync():
                 #     print("armband didn't sync")
@@ -276,17 +278,17 @@ class RecognizeWorker(multiprocessing.Process):
             return res
         else:
             # rnn 识别模式
-            acc_data = feature_extract_single(self.ACC_captured_data, 'acc')
-            gyr_data = feature_extract_single(self.GYR_captured_data, 'gyr')
-            emg_data = feature_extract_single(self.EMG_captured_data, 'emg')
+            acc_data = process_data.feature_extract_single(self.ACC_captured_data, 'acc')
+            gyr_data = process_data.feature_extract_single(self.GYR_captured_data, 'gyr')
+            emg_data = process_data.wavelet_trans(self.EMG_captured_data)
             # 选取三种特性拼接后的结果
             acc_data_appended = acc_data[3]
             gyr_data_appended = gyr_data[3]
-            emg_data_appended = emg_data[3]
+            emg_data_appended = emg_data
             # 再将三种采集类型进行拼接
-            data_mat = append_single_data_feature(acc_data=acc_data_appended,
-                                                  gyr_data=gyr_data_appended,
-                                                  emg_data=emg_data_appended)
+            data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
+                                                               gyr_data=gyr_data_appended,
+                                                               emg_data=emg_data_appended)
 
             data_id = random.randint(222, 9999999)
             data_file_name = str(data_id) + '.data'
@@ -353,98 +355,11 @@ def online_fea_extraction(online_feat, window_size, gesture_size, width_data):
     get_gest_feat = temp_gest_sample_feat.T.ravel()
     return get_gest_feat
 
-# #################### rnn  sector ##############
-
-def adjust_data_length(A):
-    tail_len = len(A) - GESTURE_SIZE
-    if tail_len < 0:
-        print('Length Error')
-        A1 = A
-    else:
-        # 前后各去掉多出来长度的一半
-        End = len(A) - tail_len / 2
-        Begin = tail_len / 2
-        A1 = A[int(Begin):int(End), :]
-    return A1
-
-
-def feature_extract_single(data, type_name):
-    """
-    根据数据类型进行特征提取
-    并将特征进行拼接
-    :param data: 数据
-    :param type_name: 数据类型
-    :return: 特征元组
-    """
-    data = adjust_data_length(data)
-    window_amount = len(data) / WINDOW_SIZE
-    windows_data = np.vsplit(data, window_amount)
-    win_index = 0
-    is_first = True
-    seg_all_feat = []
-    seg_ARC_feat = []
-    seg_RMS_feat = []
-    seg_ZC_feat = []
-
-    for Win_Data in windows_data:
-        # 依次处理每个window的数据
-        win_RMS_feat = np.sqrt(np.mean(np.square(Win_Data), axis=0))
-        Win_Data1 = np.vstack((Win_Data[1:, :], np.zeros((1, TYPE_LEN[type_name]))))
-        win_ZC_feat = np.sum(np.sign(-np.sign(Win_Data) * np.sign(Win_Data1) + 1), axis=0) - 1
-        win_ARC_feat = np.apply_along_axis(ARC3ord, 0, Win_Data)
-        # 将每个window特征提取的数据用vstack叠起来
-        if win_index == 0:
-            seg_RMS_feat = win_RMS_feat
-            seg_ZC_feat = win_ZC_feat
-            seg_ARC_feat = win_ARC_feat
-        else:
-            seg_RMS_feat = np.vstack((seg_RMS_feat, win_RMS_feat))
-            seg_ZC_feat = np.vstack((seg_ZC_feat, win_ZC_feat))
-            seg_ARC_feat = np.vstack((seg_ARC_feat, win_ARC_feat))
-        win_index += 1
-
-        # 将三种特征拼接成一个长向量
-        # 层叠 转置 遍历展开
-        Seg_Feat = np.vstack((win_RMS_feat, win_ZC_feat, win_ARC_feat))
-        All_Seg_Feat = Seg_Feat.T.ravel()
-
-        if is_first:
-            is_first = False
-            seg_all_feat = All_Seg_Feat
-        else:
-            seg_all_feat = np.vstack((seg_all_feat, All_Seg_Feat))
-    return seg_ARC_feat, seg_RMS_feat, seg_ZC_feat, seg_all_feat
-
-def append_single_data_feature(acc_data, gyr_data, emg_data):
-    """
-    拼接三种数据并归一化
-    :param acc_data: 。。
-    :param gyr_data: 。。
-    :param emg_data: 。。
-    :return: 直接可供rnn使用的矩阵
-    """
-    batch_mat = np.zeros(len(acc_data))
-    is_first = True
-    for each_window in range(len(acc_data)):
-        # 针对每个识别window
-        # 把这一次采集的三种数据采集类型进行拼接
-        line = np.append(acc_data[each_window], gyr_data[each_window])
-        line = np.append(line, emg_data[each_window])
-        if is_first:
-            is_first = False
-            batch_mat = line
-        else:
-            batch_mat = np.vstack((batch_mat, line))
-    scale_data_block(batch_mat)
-    return batch_mat
-
-# normalize
-def scale_data_block(data_block):
-    for each_line in data_block:
-        for each_feat_dim in range(len(SCALE_RNN)):
-            each_line[each_feat_dim] /= SCALE_RNN[each_feat_dim]
-
 def ARC3ord(Orin_Array):
     t_value = len(Orin_Array)
     AR_coeffs = np.polyfit(range(t_value), Orin_Array, 3)
     return AR_coeffs
+
+
+# #################### rnn  sector ##############
+#     import from process_data package

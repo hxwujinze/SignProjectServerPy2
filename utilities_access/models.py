@@ -121,19 +121,22 @@ def store_capture_feedback(capture_id, correctness):
 def pickle_cap_data2file():
     # 根据手势获取数据
     # 实际开发环境
-    # data_list = []
-    # for each_sign in GESTURES_TABLE:
-    #     sign_history_items = SingleSignCapture.objects.filter(sign_text=each_sign)
-    #     sign_id = GESTURES_TABLE.index(each_sign)
-    #     data_set = parse_data(sign_history_items, sign_id=sign_id)
-    #     data_list.extend(data_set)
+    data_list = [i for i in range(1, len(GESTURES_TABLE) + 1)]
+    for each_sign in GESTURES_TABLE:
+        sign_history_items = SingleSignCapture.objects.filter(sign_text=each_sign)
+        sign_id = GESTURES_TABLE.index(each_sign)
+        data_set = parse_data(sign_history_items, sign_id=sign_id)
+        data_list[sign_id] = data_set
+
+    sign_history_items = SingleSignCapture.objects.all()
+    sign_history_items.delete()
 
     # 获取全部数据 不含手势内容
     # 适用于测试环境
-    specified_sign_id = 5
-    sign_history_items = SingleSignCapture.objects.all()
-    data_list = [parse_data(sign_history_items, sign_id=specified_sign_id)]
-    sign_history_items.delete()
+    # specified_sign_id = 5
+    # sign_history_items = SingleSignCapture.objects.all()
+    # data_list = [parse_data(sign_history_items, sign_id=specified_sign_id)]
+    # sign_history_items.delete()
     # 最后获得的列表是
     # [ (sign_id , 数据的字典 ) , .... ]
 
