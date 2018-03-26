@@ -43,10 +43,17 @@ class LSTM(nn.Module):
 
 # 取最大值 并且转换为int 用于处理rnn输出
 def getMaxIndex(tensor):
-    prob_each_sign = tensor.data.numpy()
+    prob_each_sign = torch.squeeze(tensor).data.numpy()
     print('prob_each_sign:\n' + str(prob_each_sign))
-    tensor = torch.max(tensor, dim=1)[1]
-    return torch.squeeze(tensor).data.int()
+    max_res = torch.max(tensor, dim=1)
+    max_value = max_res[0].data.float()[0]
+    print(max_value)
+    index = max_res[1].data.int()[0]
+    print(index)
+    if max_value < 0.998:
+        print ('this is invalid gesture')
+        index = 13
+    return index
 
 if __name__ == '__main__':
 
@@ -70,7 +77,7 @@ if __name__ == '__main__':
     data_mat = torch.from_numpy(np.array([data_mat])).float()
     data_mat = Variable(data_mat)
     output = rnn_model(data_mat)
-    res = getMaxIndex(output)[0]
+    res = getMaxIndex(output)
 
     # print(str(res))
 
