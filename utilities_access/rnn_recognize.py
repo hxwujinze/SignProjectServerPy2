@@ -38,19 +38,19 @@ class LSTM(nn.Module):
         out = F.relu(out)
         # return out
         out2 = self.out2(out)
-        out2 = F.softmax(out2, dim=1)
+        out2 = F.softmax(out2)
         return out2
 
 # 取最大值 并且转换为int 用于处理rnn输出
 def getMaxIndex(tensor):
     prob_each_sign = torch.squeeze(tensor).data.numpy()
     print('prob_each_sign:\n' + str(prob_each_sign))
-    max_res = torch.max(tensor, dim=1)
+    max_res = torch.max(tensor)
     max_value = max_res[0].data.float()[0]
-    print(max_value)
+    print('prob: %f' % max_value)
     index = max_res[1].data.int()[0]
-    print(index)
-    if max_value < 0.998:
+    print('index: %d' % index)
+    if max_value < 0.99:
         print ('this is invalid gesture')
         index = 13
     return index
@@ -59,10 +59,13 @@ if __name__ == '__main__':
 
     rnn_model = LSTM()
     for root, dirs, files in os.walk(CURR_DATA_DIR):
-        for file in files:
-            if os.path.splitext(file)[1] == '.pkl':
-                file = CURR_DATA_DIR + '\\' + file
-                rnn_model.load_state_dict(torch.load(file))
+        for file_ in files:
+            if os.path.splitext(file_)[1] == '.pkl':
+                file_ = CURR_DATA_DIR + '\\' + file_
+                rnn_model.load_state_dict(torch.load(file_))
+                rnn_model.eval()
+                break
+
 
     parser = argparse.ArgumentParser(description='rnn recognize process')
     parser.add_argument('source', type=str)
@@ -78,7 +81,5 @@ if __name__ == '__main__':
     data_mat = Variable(data_mat)
     output = rnn_model(data_mat)
     res = getMaxIndex(output)
-
-    # print(str(res))
 
     sys.exit(res)

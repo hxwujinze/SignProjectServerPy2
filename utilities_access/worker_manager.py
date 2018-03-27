@@ -6,6 +6,8 @@ import threading
 import time
 from multiprocessing import Queue
 
+from .sign_recognize import RecognizeWorker
+
 '''一个类要用多进程时，self储存的变量类型必须是python里原有的，不能是自定义的一个新类'''
 
 from . import armbands_manager
@@ -121,7 +123,7 @@ class MainWorkerThread(threading.Thread):
 
         armbands = armbands_manager.get_occupied_armbands(self)
         # 初始化手语识别线程
-        from .sign_recognize import RecognizeWorker
+
         armbands_tags = []
         for each in armbands:
             time_tag = int(str(each.myo_obj.connect_time))

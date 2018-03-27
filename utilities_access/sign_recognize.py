@@ -1,9 +1,11 @@
 # coding:utf-8
+import json
 import multiprocessing
 import os
 import pickle
 import random
 import time
+from subprocess import Popen, PIPE
 
 import numpy as np
 import sklearn
@@ -35,10 +37,6 @@ PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Pyt
 
 SCALE_DATA = np.loadtxt(CURR_DATA_DIR + "\\scale.txt")
 
-# file = open(CURR_DATA_DIR + '\\scale_rnn', 'r+b')
-# SCALE_RNN = pickle.load(file)
-# file.close()
-
 # 这里将模型装载进来
 CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
 
@@ -51,11 +49,9 @@ CAP_TYPE_LIST = ['acc', 'emg', 'gyr']
 
 GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',
                   '老师 ', '发烧 ', '谢谢 ', '']
-# [ '肉 ', '鸡蛋 ','喜欢 ','您好 ','你 ','什么 ', '想 ','我 ', '很 ', '吃 ',
-#                   '老师 ' ,'发烧 ' ,'谢谢 ', '']
-
 
 queue_lock = multiprocessing.Lock()
+
 
 """
 手语识别工作线程
@@ -64,6 +60,7 @@ queue_lock = multiprocessing.Lock()
 """
 
 class RecognizeWorker(multiprocessing.Process):
+
     def __init__(self, message_q,
                  armbands_timetag,
                  event):
@@ -74,6 +71,7 @@ class RecognizeWorker(multiprocessing.Process):
         # 已经匹配 要作为识别数据源的手环对象
         print('armbands_list timestamp: ' + str(armbands_manager.connect_time_obj_map))
 
+        # 手环的identity
         self.paired_armbands = armbands_timetag
 
         # event用于终止线程
@@ -81,7 +79,8 @@ class RecognizeWorker(multiprocessing.Process):
         # status用于设置是否进行手语识别工作
         # set时进行识别 unset时不识别 初始是unset
         self.recognize_status = multiprocessing.Event()
-        # 对象管道 用于传递手环对象
+
+        self.rnn_recg_proc = ''
 
         # 手环数据采集周期
         self._t_s = 0.01
@@ -89,6 +88,9 @@ class RecognizeWorker(multiprocessing.Process):
         self.ACC_captured_data = np.array([0])
         self.GYR_captured_data = np.array([0])
         self.each_capture_gap = []
+
+        self.pipe_input = ''
+        self.pipe_output = ''
 
     #  setting start recognize flag
     def start_recognize(self):
@@ -128,7 +130,9 @@ class RecognizeWorker(multiprocessing.Process):
         self.paired_armbands = []
         for each in armbands_timetag:
             self.paired_armbands.append(armbands_manager.connect_time_obj_map[each])
-
+        if self.rnn_recg_proc == '':
+            self.pipe_input, self.pipe_output, self.rnn_recg_proc = \
+                generate_recognize_subprocces()
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
             if self.recognize_status.is_set():
@@ -172,8 +176,9 @@ class RecognizeWorker(multiprocessing.Process):
                                       data=data)
                         self.put_message_into_queue(msg)
                         print("a sign capturing and recognizing complete")
-                        time.sleep(1)
+                        time.sleep(0.8)
         print("recognize thread stopped")
+        # pipe_input.write('end')
 
     """
     采集足够长度的手语数据进行识别
@@ -297,14 +302,21 @@ class RecognizeWorker(multiprocessing.Process):
             pickle.dump(data_mat, file_)
             file_.close()
 
-            target_python_dir = PYTORCH_INTP_PATH
-            target_script_dir = CURR_WORK_DIR + '\\rnn_recognize.py'
+            # target_python_dir = PYTORCH_INTP_PATH
+            # target_script_dir = CURR_WORK_DIR + '\\rnn_recognize.py'
+            #
+            # command = '%s %s %s' % (target_python_dir, target_script_dir, data_file_name)
+            # res = os.system(command)
 
-            command = '%s %s %s' % (target_python_dir, target_script_dir, data_file_name)
-            res = os.system(command)
-            print(res)  # print('recognize_res : %d' % res)
+            self.pipe_input.write(data_file_name + '\n')
+            res = self.pipe_output.readline()
 
-            return res
+            res = json.loads(res)
+            print('each prob: %s' % res['each_prob'])
+            print('max_prob: %s' % res['max_prob'])
+            print('index: %d' % res['index'])
+            print('raw_index: %d' % res['raw_index'])
+            return res['index']
 
     def get_left_armband_obj(self):
         return self.paired_armbands[0]
@@ -360,6 +372,21 @@ def ARC3ord(Orin_Array):
     AR_coeffs = np.polyfit(range(t_value), Orin_Array, 3)
     return AR_coeffs
 
+def generate_recognize_subprocces():
+    # init recognize process
+    target_python_dir = PYTORCH_INTP_PATH
+    target_script_dir = CURR_WORK_DIR + '\\rnn_recognize_long_run.py'
+    command = target_python_dir + ' ' + target_script_dir
+    rnn_sub_process = Popen(args=command,
+                            shell=True,
+                            stdin=PIPE,
+                            stderr=PIPE,
+                            stdout=PIPE,
+                            universal_newlines=True)
+    pipe_input = rnn_sub_process.stdin
+    pipe_output = rnn_sub_process.stdout
+    print('pid %d' % rnn_sub_process.pid)
+    return pipe_input, pipe_output, rnn_sub_process
 
 # #################### rnn  sector ##############
 #     import from process_data package
