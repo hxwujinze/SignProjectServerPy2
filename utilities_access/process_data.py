@@ -96,17 +96,17 @@ def Load_ALL_Data(sign_id, batch_num):
         capture_times = len(capture_length_book.keys())
         capture_times = capture_times if capture_times < 20 else 21
         for i in range(1, capture_times):
-            resize_data_emg = Length_Adjust(data_emg[Index:Index + capture_length_book[i], 0:8])
+            resize_data_emg = length_adjust(data_emg[Index:Index + capture_length_book[i], 0:8])
             processed_data_emg.append(resize_data_emg)  # init
             # processed_data_emg.append(standardize(resize_data_emg))
             # processed_data_emg.append(normalize(resize_data_emg))
 
-            resize_data_acc = Length_Adjust(data_acc[Index:Index + capture_length_book[i], :])
+            resize_data_acc = length_adjust(data_acc[Index:Index + capture_length_book[i], :])
             processed_data_acc.append(resize_data_acc)
             # processed_data_acc.append(standardize(resize_data_acc))
             # processed_data_acc.append(normalize(resize_data_acc))
 
-            resize_data_gyr = Length_Adjust(data_gyr[Index:Index + capture_length_book[i], :])
+            resize_data_gyr = length_adjust(data_gyr[Index:Index + capture_length_book[i], :])
             processed_data_gyr.append(resize_data_gyr)
             # processed_data_gyr.append(standardize(resize_data_gyr))
             # processed_data_gyr.append(normalize(resize_data_gyr))
@@ -120,10 +120,11 @@ def Load_ALL_Data(sign_id, batch_num):
         'gyr': processed_data_gyr,
     }
 
-def Length_Adjust(A):
+def length_adjust(A):
     tail_len = len(A) - LENGTH
     if tail_len < 0:
-        print('Length Error')
+        if tail_len != -32:
+            print('Length Error')
         A1 = A
     else:
         # 前后各去掉多出来长度的一半
@@ -265,7 +266,7 @@ def __emg_feature_extract(data_set):
 
 #
 # def emg_feature_extract_single(data):
-#     data = Length_Adjust(data)
+#     data = length_adjust(data)
 #     window_amount = len(data) / EMG_WINDOW_SIZE
 #     # windows_data = data.reshape(window_amount, WINDOW_SIZE, TYPE_LEN[type_name])
 #     window_rest = len(data) % EMG_WINDOW_SIZE
@@ -350,10 +351,10 @@ def feature_extract(data_set, type_name):
     }
 
 def feature_extract_single(data, type_name):
-    data = Length_Adjust(data)
+    data = length_adjust(data)
     window_amount = len(data) / WINDOW_SIZE
     # windows_data = data.reshape(window_amount, WINDOW_SIZE, TYPE_LEN[type_name])
-    windows_data = np.vsplit(data[0:160], window_amount)
+    windows_data = np.vsplit(data[0:len(data)], window_amount)
     win_index = 0
     is_first = True
     seg_all_feat = []
@@ -456,7 +457,7 @@ def load_from_file_feed_back():
 def wavelet_trans(data):
     data = np.array(data).T
     data = pywt.threshold(data, 30, mode='hard')
-    data = pywt.wavedec(data, wavelet='db3', level=5)
+    data = pywt.wavedec(data, wavelet='db3', level=4)
     data = np.vstack((data[0].T, np.zeros(8))).T
     # 再次阈值滤波
     data = pywt.threshold(data, 20, mode='hard')

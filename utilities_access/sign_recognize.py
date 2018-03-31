@@ -1,9 +1,11 @@
 # coding:utf-8
+import Queue
 import json
 import multiprocessing
 import os
 import pickle
 import random
+import threading
 import time
 from subprocess import Popen, PIPE
 
@@ -48,8 +50,8 @@ TYPE_LEN = {
 CAP_TYPE_LIST = ['acc', 'emg', 'gyr']
 
 GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',
-                  '老师 ', '发烧 ', '谢谢 ', '']
-
+                  '老师 ', '发烧 ', '谢谢 ', '', '大家 ', '支持 ', '我们 ', '创新 ', '医生 ', '交流 ',
+                  '团队 ', '帮助 ', '聋哑人 ', '请 ']
 queue_lock = multiprocessing.Lock()
 
 
@@ -80,6 +82,8 @@ class RecognizeWorker(multiprocessing.Process):
         # set时进行识别 unset时不识别 初始是unset
         self.recognize_status = multiprocessing.Event()
 
+        # 无法pickle序列化的对象尽量在 进程的run方法里完成
+        self.online_recognizer = ''
         self.rnn_recg_proc = ''
 
         # 手环数据采集周期
@@ -133,15 +137,13 @@ class RecognizeWorker(multiprocessing.Process):
         if self.rnn_recg_proc == '':
             self.pipe_input, self.pipe_output, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
+        self.online_recognizer = OnlineRecognizer(self.message_q)
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
             if self.recognize_status.is_set():
                 print('RecognizeWorker start recognize')
                 start_time = time.time()
                 curr_time = start_time
-
-                # for armband in self.target_armband:
-                #     armband.unlock()
 
                 while self.recognize_status.is_set():
                     # 判断是否超时 每次手语采集具有时间限制 超时后停止手语采集
@@ -152,38 +154,70 @@ class RecognizeWorker(multiprocessing.Process):
                         # 返回外层循环进行等待
                         break
                     curr_time = time.time()
-                    # 开始采集手语
-                    self.capture_sign()
-                    print("sign captured , starting recognizing ")
-                    # 采集完成后根据采集的数据进行识别 采集方法返回手语结果的序号
-                    sign_index = self.recognize_sign()
-                    if self.recognize_status.is_set():
-                        print("recognizing complete")
-                        # 保存识别时采集的手环数据
-                        raw_capture_data = {
-                            'acc': self.ACC_captured_data,
-                            'emg': self.EMG_captured_data,
-                            'gyr': self.GYR_captured_data,
-                        }
 
-                        data = {
-                            'res_text': GESTURES_TABLE[sign_index],
-                            'middle_symbol': sign_index,
-                            'raw_data': raw_capture_data
-                        }
-                        # 向主线程返回识别的结果
-                        msg = Message(control='append_recognize_result',
-                                      data=data)
-                        self.put_message_into_queue(msg)
-                        print("a sign capturing and recognizing complete")
-                        time.sleep(0.8)
+                    # todo recognize process here
+                    # self.offline_recognize()
+                    self.online_recognize()
+
         print("recognize thread stopped")
-        # pipe_input.write('end')
+        self.pipe_input.write('end')
+
+    # 离线识别 先采集足够的数据 在进行识别
+    def offline_recognize(self):
+        # 开始采集手语
+        self.capture_sign()
+        # 采集完成后根据采集的数据进行识别 采集方法返回手语结果的序号
+        if self.recognize_status.is_set():
+            print("sign captured , starting recognizing ")
+            sign_index = self.recognize_sign()
+            print("recognizing complete")
+            # 保存识别时采集的手环数据
+            raw_capture_data = {
+                'acc': self.ACC_captured_data,
+                'emg': self.EMG_captured_data,
+                'gyr': self.GYR_captured_data,
+            }
+            data = {
+                'res_text': GESTURES_TABLE[sign_index],
+                'middle_symbol': sign_index,
+                'raw_data': raw_capture_data
+            }
+            # 向主线程返回识别的结果
+            msg = Message(control='append_recognize_result',
+                          data=data)
+            self.put_message_into_queue(msg)
+            print("a sign capturing and recognizing complete")
+            time.sleep(0.8)
+
+    # 在线识别 一边采集一边识别
+    def online_recognize(self):
+        self.get_left_armband_obj().vibrate(VibrationType.short)
+        time.sleep(0.31)
+        print("capture start at: %s" % time.clock())
+        cap_start_time = time.clock()
+        # 当处在进行识别状态时才采集数据
+        while self.recognize_status.is_set():
+            current_time = time.clock()
+            # 只有当采集到达末尾时才开始检查数据长度是否满足
+            # 减少采集时的无关操作
+            gap_time = current_time - cap_start_time
+            if gap_time >= self._t_s:
+                myo_obj = self.get_left_armband_obj().myo_obj
+                emg_data = myo_obj.emg
+                acc_data = list(myo_obj.acceleration)
+                gyr_data = list(myo_obj.gyroscope)
+                self.online_recognizer.append_data(acc_data, gyr_data, emg_data)
+                cap_start_time = time.clock()
+
+        # 识别结束 震动2下
+        self.get_left_armband_obj().vibrate(VibrationType.short)
+        time.sleep(0.1)
+        self.get_left_armband_obj().vibrate(VibrationType.short)
+        pass
 
     """
     采集足够长度的手语数据进行识别
     """
-
     # 如果采集过程中手环失联 会导致线程阻塞
     def capture_sign(self):
         self.init_data()
@@ -192,14 +226,14 @@ class RecognizeWorker(multiprocessing.Process):
         print("capture start at: %s" % time.clock())
         cap_start_time = time.clock()
         sign_start_time = time.clock()
-        while True:
+        # 当处在进行识别状态时才采集数据
+        while self.recognize_status.is_set():
             current_time = time.clock()
             # 只有当采集到达末尾时才开始检查数据长度是否满足
             # 减少采集时的无关操作
             if current_time - sign_start_time > 1.5:
                 if self.is_data_length_satisfied():
-                    # 满足长度后跳出采集循环
-                    # print('each capture gap: ' + str(self.each_capture_gap))
+                    # 满足长度后震动手环两下 跳出采集循环
                     self.get_left_armband_obj().vibrate(VibrationType.short)
                     time.sleep(0.1)
                     self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -207,30 +241,26 @@ class RecognizeWorker(multiprocessing.Process):
                     break
             gap_time = current_time - cap_start_time
             if gap_time >= self._t_s:
-                # self.each_capture_gap.append(gap_time)
                 cap_start_time = time.clock()
-                # if not self.is_armbands_sync():
-                #     print("armband didn't sync")
-                #     self._stop_recognize("unsync")
-                #     return
                 if len(self.paired_armbands) == 1:
                     myo_obj = self.get_left_armband_obj().myo_obj
-                    Emg = myo_obj.emg
-                    Acc = [it for it in myo_obj.acceleration]
-                    Gyr = [it for it in myo_obj.gyroscope]
+                    emg_data = myo_obj.emg
+                    acc_data = list(myo_obj.acceleration)
+                    gyr_data = list(myo_obj.gyroscope)
                 else:
                     myo_left_hand = self.get_left_armband_obj().myo_obj
                     myo_right_hand = self.get_right_armband_obj().myo_obj
                     # 根据myoProxy获取数据 双手直接通过列表拼接处理即可
-                    Emg = myo_left_hand.emg + myo_right_hand.emg
-                    Acc = [it for it in myo_left_hand.acceleration] \
-                          + [it for it in myo_right_hand.acceleration]
-                    Gyr = [it for it in myo_left_hand.gyroscope] \
-                          + [it for it in myo_right_hand.gyroscope]
 
-                self.GYR_captured_data = vstack_data(self.GYR_captured_data, Gyr)
-                self.ACC_captured_data = vstack_data(self.ACC_captured_data, Acc)
-                self.EMG_captured_data = vstack_data(self.EMG_captured_data, Emg)
+                    emg_data = myo_left_hand.emg + myo_right_hand.emg
+                    acc_data = list(myo_left_hand.acceleration) \
+                               + list(myo_right_hand.acceleration)
+                    gyr_data = list(myo_left_hand.gyroscope) \
+                               + list(myo_right_hand.gyroscope)
+
+                self.GYR_captured_data = vstack_data(self.GYR_captured_data, gyr_data)
+                self.ACC_captured_data = vstack_data(self.ACC_captured_data, acc_data)
+                self.EMG_captured_data = vstack_data(self.EMG_captured_data, emg_data)
 
     # 每次开始采集数据时用于初始化数据集
     def init_data(self):
@@ -294,24 +324,17 @@ class RecognizeWorker(multiprocessing.Process):
             data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
                                                                gyr_data=gyr_data_appended,
                                                                emg_data=emg_data_appended)
-
             data_id = random.randint(222, 9999999)
             data_file_name = str(data_id) + '.data'
             data_path = CURR_WORK_DIR + '\\' + data_file_name
             file_ = open(data_path, 'w+b')
             pickle.dump(data_mat, file_)
             file_.close()
-
-            # target_python_dir = PYTORCH_INTP_PATH
-            # target_script_dir = CURR_WORK_DIR + '\\rnn_recognize.py'
-            #
-            # command = '%s %s %s' % (target_python_dir, target_script_dir, data_file_name)
-            # res = os.system(command)
-
+            # 通过pipe向之前启动的py3识别进程发送识别数据id
             self.pipe_input.write(data_file_name + '\n')
             res = self.pipe_output.readline()
-
             res = json.loads(res)
+
             print('each prob: %s' % res['each_prob'])
             print('max_prob: %s' % res['max_prob'])
             print('index: %d' % res['index'])
@@ -323,6 +346,76 @@ class RecognizeWorker(multiprocessing.Process):
 
     def get_right_armband_obj(self):
         return self.paired_armbands[1]
+
+class OnlineRecognizer:
+    SEG_SIZE = 128
+
+    class DataProcessor(threading.Thread):
+        def __init__(self):
+            threading.Thread.__init__(self,
+                                      name='data_processor', )
+            self.data_list = []
+            self.new_data_queue = Queue.Queue()
+            self.stop_flag = threading.Event()
+
+        @staticmethod
+        def create_data_seg(acc_data, gyr_data, emg_data):
+            acc_data = np.array(acc_data)
+            gyr_data = np.array(gyr_data)
+            emg_data = np.array(emg_data)
+            acc_data = process_data.feature_extract_single(acc_data, 'acc')
+            gyr_data = process_data.feature_extract_single(gyr_data, 'gyr')
+            emg_data = process_data.wavelet_trans(emg_data)
+            # 选取三种特性拼接后的结果
+            acc_data_appended = acc_data[3]
+            gyr_data_appended = gyr_data[3]
+            emg_data_appended = emg_data
+            # 再将三种采集类型进行拼接
+            data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
+                                                               gyr_data=gyr_data_appended,
+                                                               emg_data=emg_data_appended)
+            return data_mat
+
+        def run(self):
+            while not self.stop_flag.isSet():
+                while not self.new_data_queue.empty():
+                    new_seg_data = self.new_data_queue.get()
+                    data_list = [list() for i in range(3)]
+                    for type_i in range(3):
+                        for each_data in new_seg_data:
+                            data_list[type_i].append(each_data[type_i])
+                    data_mat = self.create_data_seg(acc_data=data_list[0],
+                                                    gyr_data=data_list[1],
+                                                    emg_data=data_list[2])
+
+                    print len(data_mat)
+                    # process data ,send to recognizer
+
+        def stop_thread(self):
+            self.stop_flag.set()
+
+    def __init__(self, message_q):
+        # 数据队列 用于接受采集的数据
+        self.data_queue = Queue.Queue()
+        # 数据处理线程 将采集的数据进行特征提取 scale 等工作
+        self.data_processor = OnlineRecognizer.DataProcessor()
+        self.data_processor.start()
+        # 外部消息队列 当有识别结果时 放入该队列识别结果
+        self.outer_msg_queue = message_q
+
+    def append_data(self, acc_data, gyr_data, emg_data):
+        new_data = (acc_data, gyr_data, emg_data)
+        self.data_queue.put(new_data)
+        if self.data_queue.qsize() == OnlineRecognizer.SEG_SIZE:
+            new_seg_data = [each for each in self.data_queue.queue]
+            self.data_processor.new_data_queue.put(new_seg_data)
+            for i in range(16):
+                self.data_queue.get()
+
+    def stop_recognize(self):
+        self.data_processor.stop_thread()
+
+
 
 def vstack_data(target, step_data):
     step_data = np.array(step_data)

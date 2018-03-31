@@ -6,13 +6,12 @@ import threading
 import time
 from multiprocessing import Queue
 
+from . import armbands_manager
 from .sign_recognize import RecognizeWorker
+from .utilities_classes import Message
 
 '''一个类要用多进程时，self储存的变量类型必须是python里原有的，不能是自定义的一个新类'''
 
-from . import armbands_manager
-
-from .utilities_classes import Message
 
 # 单例模式管理
 '''

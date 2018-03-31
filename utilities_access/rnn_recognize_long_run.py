@@ -13,9 +13,9 @@ CURR_WORK_DIR = os.path.dirname(__file__)
 CURR_DATA_DIR = CURR_WORK_DIR + '\\models_data'
 
 INPUT_SIZE = 44
-NNet_SIZE = 25
+NNet_SIZE = 30
 NNet_LEVEL = 3
-CLASS_CNT = 14
+CLASS_CNT = 24
 
 class LSTM(nn.Module):
     def __init__(self):
@@ -37,7 +37,6 @@ class LSTM(nn.Module):
 
     def forward(self, x):
         lstm_out, (h_n, h_c) = self.lstm(x, None)
-        out = F.relu(lstm_out)
         out = self.out(lstm_out[:, -1, :])
         out = F.relu(out)
         # return out
@@ -52,7 +51,7 @@ def getMaxIndex(tensor):
     max_value = max_res[0].data.float()[0]
     raw_index = max_res[1].data.int()[0]
     if max_value < 0.992:
-        index = CLASS_CNT - 1
+        index = 13
     else:
         index = raw_index
 
