@@ -2,8 +2,11 @@
 import json
 import os
 import pickle
+import threading
+import time
 
 import numpy as np
+import queue
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,6 +18,7 @@ CURR_DATA_DIR = CURR_WORK_DIR + '\\models_data'
 INPUT_SIZE = 44
 NNet_SIZE = 30
 NNet_LEVEL = 3
+NNet_OUTPUT = 24
 CLASS_CNT = 24
 
 class LSTM(nn.Module):
@@ -32,8 +36,8 @@ class LSTM(nn.Module):
         # 在训练时，每次随机（如 50% 概率）忽略隐层的某些节点；
         # 这样，我们相当于随机从 2^H 个模型中采样选择模型；同时，由于每个网络只见过一个训练数据
 
-        self.out = nn.Linear(NNet_SIZE, CLASS_CNT)  # use soft max classifier.
-        self.out2 = nn.Linear(CLASS_CNT, CLASS_CNT)
+        self.out = nn.Linear(NNet_SIZE, NNet_OUTPUT)  # use soft max classifier.
+        self.out2 = nn.Linear(NNet_OUTPUT, CLASS_CNT)
 
     def forward(self, x):
         lstm_out, (h_n, h_c) = self.lstm(x, None)
@@ -50,7 +54,7 @@ def getMaxIndex(tensor):
     max_res = torch.max(tensor, dim=1)
     max_value = max_res[0].data.float()[0]
     raw_index = max_res[1].data.int()[0]
-    if max_value < 0.992:
+    if max_value < 0.95:
         index = 13
     else:
         index = raw_index
@@ -63,46 +67,97 @@ def getMaxIndex(tensor):
     }
     return return_info
 
-# if __name__ == '__main__':
-rnn_model = LSTM()
-for root, dirs, files in os.walk(CURR_DATA_DIR):
-    for file_ in files:
-        if os.path.splitext(file_)[1] == '.pkl':
-            file_ = CURR_DATA_DIR + '\\' + file_
-            rnn_model.load_state_dict(torch.load(file_))
-            rnn_model.eval()
+class RecognizeQueue(threading.Thread):
+    def __init__(self, stop_flag, rnn_model):
+        threading.Thread.__init__(self, name='recognize_queue')
+        self.data_queue = queue.Queue()
+        self.stop_flag = stop_flag
+        self.ignore_cnt = 0
+        self.rnn_model = rnn_model
+
+    def run(self):
+        while not self.stop_flag.is_set():
+            while not self.data_queue.empty():
+                new_msg = self.data_queue.get()
+                if self.ignore_cnt != 0:
+                    self.ignore_cnt -= 1
+                    continue
+                data_mat = new_msg
+                output = self.rnn_model(data_mat).cpu()
+                res = getMaxIndex(output)
+                if res['max_prob'] < 0.90:
+                    res['info'] = 'skip this'
+                elif res['raw_index'] != 13:
+                    self.ignore_cnt = 7
+                res = json.dumps(res)
+                print(res)
+
+    def add_new_data(self, data):
+        self.data_queue.put(data)
+
+    def stop_thread(self):
+        self.stop_flag.set()
+
+def main():
+    # load model
+    rnn_model = LSTM()
+    for root, dirs, files in os.walk(CURR_DATA_DIR):
+        for file_ in files:
+            if os.path.splitext(file_)[1] == '.pkl':
+                file_ = CURR_DATA_DIR + '\\' + file_
+                rnn_model.load_state_dict(torch.load(file_))
+                rnn_model.eval()
+                break
+
+    file_ = open('.\\log', 'w')
+    file_.write('model load %s\n' % time.strftime('%H:%M:%S', time.localtime(time.time())))
+    file_.close()
+
+    read_ = input()
+    mode = read_
+
+    file_ = open('.\\log', 'w')
+    file_.write('set as %s %s' % (mode, time.strftime('%H:%M:%S', time.localtime(time.time()))))
+    file_.close()
+
+    stop_event = threading.Event()
+    online_recognizer = ''
+    if mode == 'online':
+        online_recognizer = RecognizeQueue(stop_event, rnn_model)
+        online_recognizer.start()
+    while True:
+        read_ = input()
+        if read_ == 'end':
+            if online_recognizer != '':
+                online_recognizer.stop_thread()
             break
 
-# file_ = open('log','w')
-# file_.write('process start ' + time.strftime('%H-%M-%S' ,time.localtime(time.time())) + '\n')
-# file_.close()
+        data_file = read_
 
-while True:
-    read_ = input()
-    if read_ == 'end':
-        break
+        file_ = open('.\\log', 'w')
+        file_.write('read %s %s' % (data_file, time.strftime('%H:%M:%S', time.localtime(time.time()))))
+        file_.close()
 
-    # file_ = open('log', 'a')
-    # file_.write('data ' + read_ +' '+ time.strftime('%H-%M-%S', time.localtime(time.time())) + '\n')
-    # file_.close()
+        data_path = CURR_WORK_DIR + '\\' + data_file
+        data_file = open(data_path, 'r+b')
 
-    data_file = read_
-    data_path = CURR_WORK_DIR + '\\' + data_file
-    data_file = open(data_path, 'r+b')
-    data_mat = pickle.load(data_file, encoding='iso-8859-1')
-    data_file.close()
-    os.remove(data_path)
+        data_mat = pickle.load(data_file, encoding='iso-8859-1')
+        data_file.close()
+        data_mat = torch.from_numpy(np.array([data_mat])).float()
+        data_mat = Variable(data_mat)
+        os.remove(data_path)
 
-    data_mat = torch.from_numpy(np.array([data_mat])).float()
-    data_mat = Variable(data_mat)
-    output = rnn_model(data_mat)
-    res = getMaxIndex(output)
-    res = json.dumps(res)
-    # file_ = open('log', 'a')
-    # file_.write( res + ' '+ time.strftime('%H-%M-%S', time.localtime(time.time())) + '\n')
-    # file_.close()
-    print(res)
+        if mode == 'offline':
+            file_ = open('.\\log', 'w')
+            file_.write('offline recognize %s' % (time.strftime('%H:%M:%S', time.localtime(time.time()))))
+            file_.close()
 
-# file_ = open('log','w')
-# file_.write('process exit ' + time.strftime('%H-%M-%S',time.localtime(time.time())))
-# file_.close()
+            output = rnn_model(data_mat)
+            res = getMaxIndex(output)
+            res = json.dumps(res)
+            print(res)
+        else:
+            online_recognizer.put_data(data_mat)
+
+if __name__ == '__main__':
+    main()

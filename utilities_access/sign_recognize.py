@@ -137,7 +137,12 @@ class RecognizeWorker(multiprocessing.Process):
         if self.rnn_recg_proc == '':
             self.pipe_input, self.pipe_output, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
-        self.online_recognizer = OnlineRecognizer(self.message_q)
+
+        self.online_recognizer = OnlineRecognizer(self.message_q,
+                                                  self.pipe_input,
+                                                  self.pipe_output)
+
+        self.pipe_input.write('offline\n')
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
             if self.recognize_status.is_set():
@@ -156,14 +161,15 @@ class RecognizeWorker(multiprocessing.Process):
                     curr_time = time.time()
 
                     # todo recognize process here
-                    # self.offline_recognize()
-                    self.online_recognize()
+                    self.offline_recognize()
+                    # self.online_recognize()
 
         print("recognize thread stopped")
         self.pipe_input.write('end')
 
     # 离线识别 先采集足够的数据 在进行识别
     def offline_recognize(self):
+
         # 开始采集手语
         self.capture_sign()
         # 采集完成后根据采集的数据进行识别 采集方法返回手语结果的序号
@@ -191,6 +197,7 @@ class RecognizeWorker(multiprocessing.Process):
 
     # 在线识别 一边采集一边识别
     def online_recognize(self):
+        self.pipe_input.write('online')
         self.get_left_armband_obj().vibrate(VibrationType.short)
         time.sleep(0.31)
         print("capture start at: %s" % time.clock())
@@ -324,12 +331,9 @@ class RecognizeWorker(multiprocessing.Process):
             data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
                                                                gyr_data=gyr_data_appended,
                                                                emg_data=emg_data_appended)
-            data_id = random.randint(222, 9999999)
-            data_file_name = str(data_id) + '.data'
-            data_path = CURR_WORK_DIR + '\\' + data_file_name
-            file_ = open(data_path, 'w+b')
-            pickle.dump(data_mat, file_)
-            file_.close()
+
+            data_file_name = generate_data_seg_file(data_mat)
+
             # 通过pipe向之前启动的py3识别进程发送识别数据id
             self.pipe_input.write(data_file_name + '\n')
             res = self.pipe_output.readline()
@@ -350,58 +354,16 @@ class RecognizeWorker(multiprocessing.Process):
 class OnlineRecognizer:
     SEG_SIZE = 128
 
-    class DataProcessor(threading.Thread):
-        def __init__(self):
-            threading.Thread.__init__(self,
-                                      name='data_processor', )
-            self.data_list = []
-            self.new_data_queue = Queue.Queue()
-            self.stop_flag = threading.Event()
-
-        @staticmethod
-        def create_data_seg(acc_data, gyr_data, emg_data):
-            acc_data = np.array(acc_data)
-            gyr_data = np.array(gyr_data)
-            emg_data = np.array(emg_data)
-            acc_data = process_data.feature_extract_single(acc_data, 'acc')
-            gyr_data = process_data.feature_extract_single(gyr_data, 'gyr')
-            emg_data = process_data.wavelet_trans(emg_data)
-            # 选取三种特性拼接后的结果
-            acc_data_appended = acc_data[3]
-            gyr_data_appended = gyr_data[3]
-            emg_data_appended = emg_data
-            # 再将三种采集类型进行拼接
-            data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
-                                                               gyr_data=gyr_data_appended,
-                                                               emg_data=emg_data_appended)
-            return data_mat
-
-        def run(self):
-            while not self.stop_flag.isSet():
-                while not self.new_data_queue.empty():
-                    new_seg_data = self.new_data_queue.get()
-                    data_list = [list() for i in range(3)]
-                    for type_i in range(3):
-                        for each_data in new_seg_data:
-                            data_list[type_i].append(each_data[type_i])
-                    data_mat = self.create_data_seg(acc_data=data_list[0],
-                                                    gyr_data=data_list[1],
-                                                    emg_data=data_list[2])
-
-                    print len(data_mat)
-                    # process data ,send to recognizer
-
-        def stop_thread(self):
-            self.stop_flag.set()
-
-    def __init__(self, message_q):
+    def __init__(self, message_q, pipe_input, pipe_output):
         # 数据队列 用于接受采集的数据
         self.data_queue = Queue.Queue()
         # 数据处理线程 将采集的数据进行特征提取 scale 等工作
-        self.data_processor = OnlineRecognizer.DataProcessor()
+        self.data_processor = DataProcessor(pipe_input, pipe_output)
         self.data_processor.start()
         # 外部消息队列 当有识别结果时 放入该队列识别结果
         self.outer_msg_queue = message_q
+        self.pipe_input = pipe_input
+        self.pipe_output = pipe_output
 
     def append_data(self, acc_data, gyr_data, emg_data):
         new_data = (acc_data, gyr_data, emg_data)
@@ -415,7 +377,87 @@ class OnlineRecognizer:
     def stop_recognize(self):
         self.data_processor.stop_thread()
 
+class DataProcessor(threading.Thread):
+    def __init__(self, input_pipe, output_pipe):
+        threading.Thread.__init__(self,
+                                  name='data_processor', )
+        self.data_list = []
+        self.new_data_queue = Queue.Queue()
+        self.stop_flag = threading.Event()
 
+        self.input_pipe = input_pipe
+        self.output_pipe = output_pipe
+
+    @staticmethod
+    def create_data_seg(acc_data, gyr_data, emg_data):
+        acc_data = np.array(acc_data)
+        gyr_data = np.array(gyr_data)
+        emg_data = np.array(emg_data)
+        acc_data = process_data.feature_extract_single(acc_data, 'acc')
+        gyr_data = process_data.feature_extract_single(gyr_data, 'gyr')
+        emg_data = process_data.wavelet_trans(emg_data)
+        # 选取三种特性拼接后的结果
+        acc_data_appended = acc_data[3]
+        gyr_data_appended = gyr_data[3]
+        emg_data_appended = emg_data
+        # 再将三种采集类型进行拼接
+        data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
+                                                           gyr_data=gyr_data_appended,
+                                                           emg_data=emg_data_appended)
+        return data_mat
+
+    def run(self):
+        while not self.stop_flag.isSet():
+            while not self.new_data_queue.empty():
+                new_seg_data = self.new_data_queue.get()
+                data_list = [list() for i in range(3)]
+                for type_i in range(3):
+                    for each_data in new_seg_data:
+                        data_list[type_i].append(each_data[type_i])
+                data_mat = self.create_data_seg(acc_data=data_list[0],
+                                                gyr_data=data_list[1],
+                                                emg_data=data_list[2])
+
+                print len(data_mat)
+                data_file_name = generate_data_seg_file(data_mat)
+                self.input_pipe.write(data_file_name)
+
+    def stop_thread(self):
+        self.stop_flag.set()
+
+class ResultReceiver(threading.Thread):
+    def __init__(self, message_q, output_pipe, stop_flag):
+        threading.Thread.__init__(self)
+        self.message_q = message_q
+        self.output_pipe = output_pipe
+        self.stop_flag = stop_flag
+
+    def run(self):
+        while not self.stop_flag.is_set():
+            res = self.output_pipe.readline()
+            res = json.loads(res)
+
+            if res['info'] == 'skip this':
+                print('skip this')
+                continue
+
+            print("sign captured , starting recognizing ")
+            sign_index = res['raw_index']
+            raw_capture_data = {
+                'acc': [],
+                'emg': [],
+                'gyr': [],
+            }
+            data = {
+                'res_text': GESTURES_TABLE[sign_index],
+                'middle_symbol': sign_index,
+                'raw_data': raw_capture_data
+            }
+            # 向主线程返回识别的结果
+            msg = Message(control='append_recognize_result',
+                          data=data)
+            print("a sign capturing and recognizing complete")
+            self.message_q.put(msg)
 
 def vstack_data(target, step_data):
     step_data = np.array(step_data)
@@ -480,6 +522,16 @@ def generate_recognize_subprocces():
     pipe_output = rnn_sub_process.stdout
     print('pid %d' % rnn_sub_process.pid)
     return pipe_input, pipe_output, rnn_sub_process
+
+def generate_data_seg_file(data_mat):
+    data_id = random.randint(222, 9999999)
+    data_file_name = str(data_id) + '.data'
+    data_path = CURR_WORK_DIR + '\\' + data_file_name
+    file_ = open(data_path, 'w+b')
+    pickle.dump(data_mat, file_)
+    file_.close()
+    return data_file_name
+
 
 # #################### rnn  sector ##############
 #     import from process_data package
