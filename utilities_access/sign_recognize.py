@@ -10,7 +10,6 @@ import time
 from subprocess import Popen, PIPE
 
 import numpy as np
-import sklearn
 from myo.lowlevel import VibrationType
 from sklearn.externals import joblib
 
@@ -29,6 +28,7 @@ MAX_CAPTURE_TIME = 60
 RNN_STATE = 566
 SVM_STATE = 852
 
+# todo 在这里进行更改识别算法
 CURR_CLASSIFY_STATE = RNN_STATE
 
 CURR_WORK_DIR = os.path.join(os.getcwd(), 'utilities_access')
@@ -289,52 +289,24 @@ class RecognizeWorker(multiprocessing.Process):
             return self.get_left_armband_obj().is_sync and \
                    self.get_right_armband_obj().is_sync
 
-    # 识别手语
+    # 识别手语 rnn svm 使用相同的数据处理方法
     def recognize_sign(self):
         # 如果已经设置为结束识别了 就不进行识别操作
         if not self.recognize_status.is_set():
             return
-        if CURR_CLASSIFY_STATE == SVM_STATE:
-
-            ACC_ges_fea = online_fea_extraction(self.ACC_captured_data[0:GESTURE_SIZE, 0:3],
-                                                WINDOW_SIZE,
-                                                GESTURE_SIZE, 3)
-            GYR_ges_fea = online_fea_extraction(self.GYR_captured_data[0:GESTURE_SIZE, 0:3],
-                                                WINDOW_SIZE,
-                                                GESTURE_SIZE, 3)
-
-            EMG_ges_fea = online_fea_extraction(self.EMG_captured_data[0:GESTURE_SIZE, 0:8],
-                                                WINDOW_SIZE,
-                                                GESTURE_SIZE, 8)
-
-            # 进行预测并输出手势的序号
-
-            Combined_fea_list = np.hstack((EMG_ges_fea, ACC_ges_fea, GYR_ges_fea))
-            Combined_fea_list_tmp = Combined_fea_list
-            Combined_fea_list = np.vstack((Combined_fea_list, Combined_fea_list_tmp))
-
-            max_abs_scaler = sklearn.preprocessing.MaxAbsScaler()
-            max_abs_scaler.scale_ = SCALE_DATA
-
-            norm_online_feat = max_abs_scaler.transform(Combined_fea_list)
-            res = int(CLF.predict([norm_online_feat[0, :]]))
-            return res
-        else:
-            # rnn 识别模式
-            acc_data = process_data.feature_extract_single(self.ACC_captured_data, 'acc')
-            gyr_data = process_data.feature_extract_single(self.GYR_captured_data, 'gyr')
-            emg_data = process_data.wavelet_trans(self.EMG_captured_data)
-            # 选取三种特性拼接后的结果
-            acc_data_appended = acc_data[3]
-            gyr_data_appended = gyr_data[3]
-            emg_data_appended = emg_data
-            # 再将三种采集类型进行拼接
-            data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
-                                                               gyr_data=gyr_data_appended,
-                                                               emg_data=emg_data_appended)
-
+        acc_data = process_data.feature_extract_single(self.ACC_captured_data, 'acc')
+        gyr_data = process_data.feature_extract_single(self.GYR_captured_data, 'gyr')
+        emg_data = process_data.wavelet_trans(self.EMG_captured_data)
+        # 选取三种特性拼接后的结果
+        acc_data_appended = acc_data[3]
+        gyr_data_appended = gyr_data[3]
+        emg_data_appended = emg_data
+        # 再将三种采集类型进行拼接
+        data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
+                                                           gyr_data=gyr_data_appended,
+                                                           emg_data=emg_data_appended)
+        if CURR_CLASSIFY_STATE == RNN_STATE:
             data_file_name = generate_data_seg_file(data_mat)
-
             # 通过pipe向之前启动的py3识别进程发送识别数据id
             self.pipe_input.write(data_file_name + '\n')
             res = self.pipe_output.readline()
@@ -345,6 +317,12 @@ class RecognizeWorker(multiprocessing.Process):
             print('index: %d' % res['index'])
             print('raw_index: %d' % res['raw_index'])
             return res['index']
+
+        elif CURR_CLASSIFY_STATE == SVM_STATE:
+            # 直接把每个windows的数据展开成一个长的向量 44 * 10
+            res = int(CLF.predict(data_mat.ravel()))
+            return res
+
 
     def get_left_armband_obj(self):
         return self.paired_armbands[0]

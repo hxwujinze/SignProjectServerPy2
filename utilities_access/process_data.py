@@ -264,53 +264,6 @@ def __emg_feature_extract(data_set):
         'append_all': data_trans,
     }
 
-#
-# def emg_feature_extract_single(data):
-#     data = length_adjust(data)
-#     window_amount = len(data) / EMG_WINDOW_SIZE
-#     # windows_data = data.reshape(window_amount, WINDOW_SIZE, TYPE_LEN[type_name])
-#     window_rest = len(data) % EMG_WINDOW_SIZE
-#     data_len = (len(data) - window_rest) if window_rest != 0 else len(data)
-#     windows_data = np.vsplit(data[0:data_len, :], window_amount)
-#     win_index = 0
-#     is_first = True
-#     seg_all_feat = []
-#     seg_RMS_feat = []
-#     seg_VAR_feat = []
-#
-#     for Win_Data in windows_data:
-#         # 依次处理每个window的数据
-#         win_RMS_feat = np.sqrt(np.mean(np.square(Win_Data), axis=0))
-#
-#         win_avg_value = np.sum(Win_Data, axis=0) / EMG_WINDOW_SIZE
-#         win_avg = np.array([win_avg_value for j in range(EMG_WINDOW_SIZE)])
-#
-#         diff = Win_Data - win_avg
-#         square = np.square(diff)
-#
-#         win_VAR_feat = np.mean(square, axis=0)
-#         # 将每个window特征提取的数据用vstack叠起来
-#         if win_index == 0:
-#             seg_RMS_feat = win_RMS_feat
-#             seg_VAR_feat = win_VAR_feat
-#         else:
-#             seg_RMS_feat = np.vstack((seg_RMS_feat, win_RMS_feat))
-#             seg_VAR_feat = np.vstack((seg_VAR_feat, win_VAR_feat))
-#         win_index += 1
-#
-#         # 将三种特征拼接成一个长向量
-#         # 层叠 转置 遍历展开
-#         Seg_Feat = np.vstack((win_RMS_feat, win_VAR_feat))
-#         All_Seg_Feat = Seg_Feat.T.ravel()
-#
-#         if is_first:
-#             is_first = False
-#             seg_all_feat = All_Seg_Feat
-#         else:
-#             seg_all_feat = np.vstack((seg_all_feat, All_Seg_Feat))
-#
-#     return seg_RMS_feat, seg_VAR_feat, seg_all_feat
-
 
 '''
 提取一个手势的一个batch的某一信号种类的全部数据
