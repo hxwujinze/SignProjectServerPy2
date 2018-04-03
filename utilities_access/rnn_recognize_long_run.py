@@ -3,7 +3,6 @@ import json
 import os
 import pickle
 import threading
-import time
 
 import numpy as np
 import queue
@@ -109,17 +108,8 @@ def main():
                 rnn_model.eval()
                 break
 
-    file_ = open('.\\log', 'w')
-    file_.write('model load %s\n' % time.strftime('%H:%M:%S', time.localtime(time.time())))
-    file_.close()
-
     read_ = input()
     mode = read_
-
-    file_ = open('.\\log', 'w')
-    file_.write('set as %s %s' % (mode, time.strftime('%H:%M:%S', time.localtime(time.time()))))
-    file_.close()
-
     stop_event = threading.Event()
     online_recognizer = ''
     if mode == 'online':
@@ -133,11 +123,6 @@ def main():
             break
 
         data_file = read_
-
-        file_ = open('.\\log', 'w')
-        file_.write('read %s %s' % (data_file, time.strftime('%H:%M:%S', time.localtime(time.time()))))
-        file_.close()
-
         data_path = CURR_WORK_DIR + '\\' + data_file
         data_file = open(data_path, 'r+b')
 
@@ -148,10 +133,6 @@ def main():
         os.remove(data_path)
 
         if mode == 'offline':
-            file_ = open('.\\log', 'w')
-            file_.write('offline recognize %s' % (time.strftime('%H:%M:%S', time.localtime(time.time()))))
-            file_.close()
-
             output = rnn_model(data_mat)
             res = getMaxIndex(output)
             res = json.dumps(res)

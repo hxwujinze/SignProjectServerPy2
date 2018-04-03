@@ -35,7 +35,8 @@ CURR_WORK_DIR = os.path.join(os.getcwd(), 'utilities_access')
 CURR_DATA_DIR = CURR_WORK_DIR + '\\models_data'
 
 # todo 这里键入python3路径 for pytroch运行
-PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
+# PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
+PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
 
 SCALE_DATA = np.loadtxt(CURR_DATA_DIR + "\\scale.txt")
 
