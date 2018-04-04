@@ -39,5 +39,5 @@ class LSTM(nn.Module):
         out = self.out(out[:, -1, :])
         out = F.relu(out)
         out2 = self.out2(out)
-        out2 = F.softmax(out2)
+        out2 = F.softmax(out2, dim=1)
         return out2

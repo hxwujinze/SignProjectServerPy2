@@ -28,6 +28,9 @@ MAX_CAPTURE_TIME = 60
 RNN_STATE = 566
 SVM_STATE = 852
 
+# todo 识别模式 online  offline
+RECOGNIZE_MODE = 'offline'
+
 # todo 在这里进行更改识别算法
 CURR_CLASSIFY_STATE = RNN_STATE
 
@@ -109,8 +112,6 @@ class RecognizeWorker(multiprocessing.Process):
         # 向主线程发送消息 通知已经停止手语识别了
         msg = Message(control='stop_recognize', data={"type": stop_type})
         self.put_message_into_queue(msg)
-        # for armband in self.target_armband:
-        #     armband.lock()
 
     """
     向主线程消息队列中添加消息的方法 多线程数据访问需要加锁解锁
@@ -139,11 +140,12 @@ class RecognizeWorker(multiprocessing.Process):
             self.pipe_input, self.pipe_output, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
 
-        self.online_recognizer = OnlineRecognizer(self.message_q,
-                                                  self.pipe_input,
-                                                  self.pipe_output)
+        if RECOGNIZE_MODE == 'online':
+            self.online_recognizer = OnlineRecognizer(self.message_q,
+                                                      self.pipe_input,
+                                                      self.pipe_output)
+        self.pipe_input.write(RECOGNIZE_MODE + '\n')
 
-        self.pipe_input.write('offline\n')
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
             if self.recognize_status.is_set():
@@ -161,12 +163,13 @@ class RecognizeWorker(multiprocessing.Process):
                         break
                     curr_time = time.time()
 
-                    # todo recognize process here
-                    self.offline_recognize()
-                    # self.online_recognize()
+                    if RECOGNIZE_MODE == 'offline':
+                        self.offline_recognize()
+                    else:
+                        self.online_recognize()
 
         print("recognize thread stopped\n")
-        self.pipe_input.write('end')
+        self.pipe_input.write('end\n')
 
     # 离线识别 先采集足够的数据 在进行识别
     def offline_recognize(self):
@@ -198,7 +201,6 @@ class RecognizeWorker(multiprocessing.Process):
 
     # 在线识别 一边采集一边识别
     def online_recognize(self):
-        self.pipe_input.write('online')
         self.get_left_armband_obj().vibrate(VibrationType.short)
         time.sleep(0.31)
         print("capture start at: %s" % time.clock())
@@ -312,10 +314,11 @@ class RecognizeWorker(multiprocessing.Process):
             res = self.pipe_output.readline()
             res = json.loads(res)
 
-            print('each prob: %s' % res['each_prob'])
+            print('\neach prob: %s' % res['each_prob'])
             print('max_prob: %s' % res['max_prob'])
             print('index: %d' % res['index'])
             print('raw_index: %d' % res['raw_index'])
+
             return res['index']
 
         elif CURR_CLASSIFY_STATE == SVM_STATE:
@@ -334,15 +337,25 @@ class OnlineRecognizer:
     SEG_SIZE = 128
 
     def __init__(self, message_q, pipe_input, pipe_output):
-        # 数据队列 用于接受采集的数据
-        self.data_queue = Queue.Queue()
-        # 数据处理线程 将采集的数据进行特征提取 scale 等工作
-        self.data_processor = DataProcessor(pipe_input, pipe_output)
-        self.data_processor.start()
-        # 外部消息队列 当有识别结果时 放入该队列识别结果
         self.outer_msg_queue = message_q
         self.pipe_input = pipe_input
         self.pipe_output = pipe_output
+        self.stop_flag = threading.Event()
+
+        # 数据队列 用于接受采集的数据
+        self.data_queue = Queue.Queue()
+        # 数据处理线程 将采集的数据进行特征提取 scale 等工作
+        self.data_processor = DataProcessor(pipe_input,
+                                            pipe_output,
+                                            self.stop_flag)
+        self.data_processor.start()
+
+        self.result_receiver = ResultReceiver(self.outer_msg_queue,
+                                              self.pipe_output,
+                                              self.stop_flag)
+        self.result_receiver.start()
+        # 外部消息队列 当有识别结果时 放入该队列识别结果
+
 
     def append_data(self, acc_data, gyr_data, emg_data):
         new_data = (acc_data, gyr_data, emg_data)
@@ -354,15 +367,15 @@ class OnlineRecognizer:
                 self.data_queue.get()
 
     def stop_recognize(self):
-        self.data_processor.stop_thread()
+        self.stop_flag.set()
 
 class DataProcessor(threading.Thread):
-    def __init__(self, input_pipe, output_pipe):
+    def __init__(self, input_pipe, output_pipe, stop_flag):
         threading.Thread.__init__(self,
                                   name='data_processor', )
         self.data_list = []
         self.new_data_queue = Queue.Queue()
-        self.stop_flag = threading.Event()
+        self.stop_flag = stop_flag
 
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
@@ -397,12 +410,10 @@ class DataProcessor(threading.Thread):
                                                 gyr_data=data_list[1],
                                                 emg_data=data_list[2])
 
-                print len(data_mat)
                 data_file_name = generate_data_seg_file(data_mat)
-                self.input_pipe.write(data_file_name)
+                self.input_pipe.write(data_file_name + '\n')
+        self.input_pipe.write('end\n')
 
-    def stop_thread(self):
-        self.stop_flag.set()
 
 class ResultReceiver(threading.Thread):
     def __init__(self, message_q, output_pipe, stop_flag):
@@ -416,11 +427,11 @@ class ResultReceiver(threading.Thread):
             res = self.output_pipe.readline()
             res = json.loads(res)
 
+            print(json.dumps(res, indent=2))
+
             if res['info'] == 'skip this':
                 print('skip this')
                 continue
-
-            print("sign captured , starting recognizing ")
             sign_index = res['raw_index']
             raw_capture_data = {
                 'acc': [],
@@ -435,8 +446,8 @@ class ResultReceiver(threading.Thread):
             # 向主线程返回识别的结果
             msg = Message(control='append_recognize_result',
                           data=data)
-            print("a sign capturing and recognizing complete")
-            self.message_q.put(msg)
+            if not self.stop_flag.is_set():
+                self.message_q.put(msg)
 
 def vstack_data(target, step_data):
     step_data = np.array(step_data)

@@ -28,7 +28,7 @@ def getMaxIndex(tensor):
 
     return_info = {
         'each_prob': str(prob_each_sign[:]),
-        'max_prob': '%f' % max_value,
+        'max_prob': max_value,
         'index': index,
         'raw_index': raw_index,
     }
@@ -52,6 +52,7 @@ class RecognizeQueue(threading.Thread):
                 data_mat = new_msg
                 output = self.rnn_model(data_mat).cpu()
                 res = getMaxIndex(output)
+                res['info'] = 'ok'
                 if res['max_prob'] < 0.90:
                     res['info'] = 'skip this'
                 elif res['raw_index'] != 13:
@@ -67,22 +68,25 @@ class RecognizeQueue(threading.Thread):
 
 def main():
     # load model
-    rnn_model = LSTM()
-    for root, dirs, files in os.walk(CURR_DATA_DIR):
-        for file_ in files:
-            if os.path.splitext(file_)[1] == '.pkl':
-                file_ = CURR_DATA_DIR + '\\' + file_
-                rnn_model.load_state_dict(torch.load(file_))
-                rnn_model.eval()
-                break
-
     read_ = input()
     mode = read_
     stop_event = threading.Event()
     online_recognizer = ''
+    rnn_model = LSTM()
     if mode == 'online':
+        rnn_model.load_state_dict(torch.load(CURR_DATA_DIR + '\\online_model.pkl'))
         online_recognizer = RecognizeQueue(stop_event, rnn_model)
         online_recognizer.start()
+    else:
+        for root, dirs, files in os.walk(CURR_DATA_DIR):
+            for file_ in files:
+                file_name_split = os.path.splitext(file_)
+                if file_name_split[1] == '.pkl' and file_name_split[0] != 'online_model':
+                    file_ = CURR_DATA_DIR + '\\' + file_
+                    rnn_model.load_state_dict(torch.load(file_))
+                    rnn_model.eval()
+                    break
+
     while True:
         read_ = input()
         if read_ == 'end':
@@ -106,7 +110,7 @@ def main():
             res = json.dumps(res)
             print(res)
         else:
-            online_recognizer.put_data(data_mat)
+            online_recognizer.add_new_data(data_mat)
 
 if __name__ == '__main__':
     main()
