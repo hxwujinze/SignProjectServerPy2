@@ -19,6 +19,7 @@ NNet_SIZE = 30
 NNet_LEVEL = 3
 NNet_OUTPUT = 24
 CLASS_CNT = 24
+DROPOUT = 0.5
 
 class LSTM(nn.Module):
     def __init__(self):
@@ -26,23 +27,19 @@ class LSTM(nn.Module):
         self.lstm = nn.LSTM(
             input_size=INPUT_SIZE,  # feature's number
             # 2*(3+3+3*4) + 8
-            #    36            8
+            #    36       + 8
             hidden_size=NNet_SIZE,  # hidden size of rnn layers
             num_layers=NNet_LEVEL,  # the number of rnn layers
             batch_first=True,
-            dropout=0.4)
-        # dropout :
-        # 在训练时，每次随机（如 50% 概率）忽略隐层的某些节点；
-        # 这样，我们相当于随机从 2^H 个模型中采样选择模型；同时，由于每个网络只见过一个训练数据
-
+            dropout=DROPOUT)
         self.out = nn.Linear(NNet_SIZE, NNet_OUTPUT)  # use soft max classifier.
         self.out2 = nn.Linear(NNet_OUTPUT, CLASS_CNT)
 
     def forward(self, x):
         lstm_out, (h_n, h_c) = self.lstm(x, None)
-        out = self.out(lstm_out[:, -1, :])
+        out = F.relu(lstm_out)
+        out = self.out(out[:, -1, :])
         out = F.relu(out)
-        # return out
         out2 = self.out2(out)
         out2 = F.softmax(out2, dim=1)
         return out2
@@ -53,7 +50,7 @@ def getMaxIndex(tensor):
     max_res = torch.max(tensor, dim=1)
     max_value = max_res[0].data.float()[0]
     raw_index = max_res[1].data.int()[0]
-    if max_value < 0.95:
+    if max_value < 0.90:
         index = 13
     else:
         index = raw_index
