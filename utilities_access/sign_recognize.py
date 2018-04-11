@@ -29,7 +29,7 @@ RNN_STATE = 566
 SVM_STATE = 852
 
 # todo 识别模式 online  offline
-RECOGNIZE_MODE = 'offline'
+RECOGNIZE_MODE = 'online'
 
 # todo 在这里进行更改识别算法
 CURR_CLASSIFY_STATE = RNN_STATE
@@ -77,7 +77,7 @@ class RecognizeWorker(multiprocessing.Process):
         # 已经匹配 要作为识别数据源的手环对象
         print('armbands_list timestamp: ' + str(armbands_manager.connect_time_obj_map))
 
-        # 手环的identity
+        # 手环的identity 使用手环的连接时间tag
         self.paired_armbands = armbands_timetag
 
         # event用于终止线程
@@ -86,9 +86,10 @@ class RecognizeWorker(multiprocessing.Process):
         # set时进行识别 unset时不识别 初始是unset
         self.recognize_status = multiprocessing.Event()
 
-        # 无法pickle序列化的对象尽量在 进程的run方法里完成
-        self.online_recognizer = ''
-        self.rnn_recg_proc = ''
+        # 无法pickle序列化的类对象的实例化需要在进程的run方法里完成
+        # 这里先用None 进行占位
+        self.online_recognizer = None
+        self.rnn_recg_proc = None
 
         # 手环数据采集周期
         self._t_s = 0.01
@@ -97,8 +98,10 @@ class RecognizeWorker(multiprocessing.Process):
         self.GYR_captured_data = np.array([0])
         self.each_capture_gap = []
 
-        self.pipe_input = ''
-        self.pipe_output = ''
+        # 与识别进程通信使用的管道
+        self.pipe_input = None
+        self.pipe_output = None
+
 
     #  setting start recognize flag
     def start_recognize(self):
@@ -136,7 +139,7 @@ class RecognizeWorker(multiprocessing.Process):
         self.paired_armbands = []
         for each in armbands_timetag:
             self.paired_armbands.append(armbands_manager.connect_time_obj_map[each])
-        if self.rnn_recg_proc == '':
+        if self.rnn_recg_proc is None:
             self.pipe_input, self.pipe_output, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
 
@@ -148,8 +151,9 @@ class RecognizeWorker(multiprocessing.Process):
 
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
+            time.sleep(0.05)
             if self.recognize_status.is_set():
-                print('RecognizeWorker start recognize')
+                print('RecognizeWorker start working')
                 start_time = time.time()
                 curr_time = start_time
 
@@ -180,7 +184,7 @@ class RecognizeWorker(multiprocessing.Process):
         if self.recognize_status.is_set():
             print("sign captured , starting recognizing ")
             sign_index = self.recognize_sign()
-            print("recognizing complete")
+            print("recognizing complete\n")
             # 保存识别时采集的手环数据
             raw_capture_data = {
                 'acc': self.ACC_captured_data,
@@ -196,7 +200,6 @@ class RecognizeWorker(multiprocessing.Process):
             msg = Message(control='append_recognize_result',
                           data=data)
             self.put_message_into_queue(msg)
-            print("a sign capturing and recognizing complete")
             time.sleep(0.8)
 
     # 在线识别 一边采集一边识别
@@ -208,22 +211,23 @@ class RecognizeWorker(multiprocessing.Process):
         # 当处在进行识别状态时才采集数据
         while self.recognize_status.is_set():
             current_time = time.clock()
-            # 只有当采集到达末尾时才开始检查数据长度是否满足
-            # 减少采集时的无关操作
             gap_time = current_time - cap_start_time
             if gap_time >= self._t_s:
                 myo_obj = self.get_left_armband_obj().myo_obj
-                emg_data = myo_obj.emg
+                emg_data = tuple(myo_obj.emg)
                 acc_data = list(myo_obj.acceleration)
                 gyr_data = list(myo_obj.gyroscope)
-                self.online_recognizer.append_data(acc_data, gyr_data, emg_data)
+                if self.recognize_status.is_set():
+                    self.online_recognizer.append_data(acc_data, gyr_data, emg_data)
                 cap_start_time = time.clock()
+
+        # 结束一次采集后  将历史数据保存起来
+        self.online_recognizer.store_raw_history_data()
 
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
         time.sleep(0.1)
         self.get_left_armband_obj().vibrate(VibrationType.short)
-        pass
 
     """
     采集足够长度的手语数据进行识别
@@ -313,11 +317,14 @@ class RecognizeWorker(multiprocessing.Process):
             self.pipe_input.write(data_file_name + '\n')
             res = self.pipe_output.readline()
             res = json.loads(res)
-
-            print('\neach prob: %s' % res['each_prob'])
+            print('**************************************')
+            print('recognize result:')
+            each_prob = 'each prob: \n' + res['each_prob']
+            print(each_prob)
             print('max_prob: %s' % res['max_prob'])
             print('index: %d' % res['index'])
             print('raw_index: %d' % res['raw_index'])
+            print('**************************************')
 
             return res['index']
 
@@ -342,29 +349,64 @@ class OnlineRecognizer:
         self.pipe_output = pipe_output
         self.stop_flag = threading.Event()
 
-        # 数据队列 用于接受采集的数据
-        self.data_queue = Queue.Queue()
+        # 当前识别数据段的窗口指针
+        self.window_start = 0
+        self.window_end = 128
+
+        # 数据缓冲区 用于接受采集的数据
+        # 分别对应 acc gyr emg
+        self.data_buffer = ([], [], [])
+
+
+
         # 数据处理线程 将采集的数据进行特征提取 scale 等工作
         self.data_processor = DataProcessor(pipe_input,
                                             pipe_output,
                                             self.stop_flag)
         self.data_processor.start()
 
+        # 识别结果接受线程 当收到新的识别结果时
+        # 将识别结果放入与工作线程通讯的消息队列 作为识别出的结果
         self.result_receiver = ResultReceiver(self.outer_msg_queue,
                                               self.pipe_output,
                                               self.stop_flag)
         self.result_receiver.start()
-        # 外部消息队列 当有识别结果时 放入该队列识别结果
+
 
 
     def append_data(self, acc_data, gyr_data, emg_data):
+        """
+        每当采集一个数据时 追加到在线识别的数据buffer中
+        移动窗口 判断当前是否是一个采集window
+        :param acc_data: 一次cap的acc
+        :param gyr_data: gyr
+        :param emg_data: emg
+        """
         new_data = (acc_data, gyr_data, emg_data)
-        self.data_queue.put(new_data)
-        if self.data_queue.qsize() == OnlineRecognizer.SEG_SIZE:
-            new_seg_data = [each for each in self.data_queue.queue]
-            self.data_processor.new_data_queue.put(new_seg_data)
-            for i in range(16):
-                self.data_queue.get()
+        for each_cap_type in range(len(new_data)):
+            # 将三种数据追加到各自数据种类的buffer中
+            self.data_buffer[each_cap_type].append(new_data[each_cap_type])
+
+        # 当window所选的数据缓冲区都有数据了 将窗口内数据传给数据处理对象
+        if len(self.data_buffer[0]) >= self.window_end:
+            new_data_seg = [each_cap_type_buffer[self.window_start:self.window_end]
+                            for each_cap_type_buffer in self.data_buffer]
+            self.data_processor.new_data_queue.put(new_data_seg)
+            self.window_end += 16
+            self.window_start += 16
+
+    def store_raw_history_data(self):
+        # 将buffer内的数据作为原始的历史采集数据进行保存
+        # 便于之后的分析
+        data_history = {
+            'acc': self.data_buffer[0],
+            'gry': self.data_buffer[1],
+            'emg': self.data_buffer[2]
+        }
+        time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
+        file_ = open(CURR_DATA_DIR + '\\raw_data_history_' + time_tag, 'w+b')
+        pickle.dump(data_history, file_)
+        file_.close()
 
     def stop_recognize(self):
         self.stop_flag.set()
@@ -379,6 +421,35 @@ class DataProcessor(threading.Thread):
 
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
+        self.processed_data_history = []
+
+    def run(self):
+        data_mat_cnt = 0
+        while not self.stop_flag.isSet():
+            while not self.new_data_queue.empty():
+                new_seg_data = self.new_data_queue.get()
+                data_mat = self.create_data_seg(acc_data=new_seg_data[0],
+                                                gyr_data=new_seg_data[1],
+                                                emg_data=new_seg_data[2])
+                data_file_name = generate_data_seg_file(data_mat)
+                self.input_pipe.write(data_file_name + '\n')
+                # 历史数据保存的格式： 采集的时间 数据计数 数据内容
+                data_history = {
+                    'time': time.time(),
+                    'data_nu': data_mat_cnt,
+                    'data_mat': data_mat,
+                }
+                self.processed_data_history.append(data_history)
+                data_mat_cnt += 1
+        self.input_pipe.write('end\n')
+
+        # 每次停止在线识别时 将所有处理过的历史数据保存起来
+        time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
+        file_ = open(CURR_DATA_DIR + '\\processed_data_history_' + time_tag, 'w+b')
+        pickle.dump(self.processed_data_history, file_)
+        file_.close()
+
+
 
     @staticmethod
     def create_data_seg(acc_data, gyr_data, emg_data):
@@ -398,21 +469,6 @@ class DataProcessor(threading.Thread):
                                                            emg_data=emg_data_appended)
         return data_mat
 
-    def run(self):
-        while not self.stop_flag.isSet():
-            while not self.new_data_queue.empty():
-                new_seg_data = self.new_data_queue.get()
-                data_list = [list() for i in range(3)]
-                for type_i in range(3):
-                    for each_data in new_seg_data:
-                        data_list[type_i].append(each_data[type_i])
-                data_mat = self.create_data_seg(acc_data=data_list[0],
-                                                gyr_data=data_list[1],
-                                                emg_data=data_list[2])
-
-                data_file_name = generate_data_seg_file(data_mat)
-                self.input_pipe.write(data_file_name + '\n')
-        self.input_pipe.write('end\n')
 
 
 class ResultReceiver(threading.Thread):

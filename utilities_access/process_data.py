@@ -45,23 +45,42 @@ def length_adjust(A):
         A1 = A[int(Begin):int(End), :]
     return A1
 
+def trans_data_to_time_seqs(data_set):
+    return data_set.T
+
 
 normalize_scaler = preprocessing.MinMaxScaler()
-normalize_scale_collect = []
 def normalize(data):
     normalize_scaler.fit(data)
+    scale_adjust()
     data = normalize_scaler.transform(data)
-    curr_scale = [each for each in normalize_scaler.scale_]
-    # normalize_scale_collect.append(curr_scale)
     return data
 
 standardize_scaler = preprocessing.StandardScaler()
-standardize_scale_collect = []
 def standardize(data):
     standardize_scaler.fit(data)
     data = standardize_scaler.transform(data)
-    # standardize_scale_collect.append([each for each in standardize_scaler.scale_])
+    standardize_scale_collect.append([each for each in standardize_scaler.scale_])
     return data
+
+def scale_adjust():
+    """
+    根据scale的情况判断是否需要进行scale
+    scale的大小是由这个数据的max - min的得出 如果相差不大 就不进行scale
+    通过修改scale和min的值使其失去scale的作用
+
+    note: scale 的大小时max - min 的倒数
+    """
+    curr_scale = normalize_scaler.scale_
+    curr_min = normalize_scaler.min_
+
+    for each_val in range(len(curr_scale)):
+        if curr_scale[each_val] > 1:
+            curr_scale[each_val] = 1
+        if abs(curr_min[each_val]) < 2:
+            curr_min[each_val] = 0
+
+
 
 
 def emg_feature_extract(data_set):
@@ -84,6 +103,7 @@ def __emg_feature_extract(data_set):
         'append_all': data_trans,
     }
 
+
 '''
 提取一个手势的一个batch的某一信号种类的全部数据
 数据形式保存不变 只改变数值和每次采集ndarray的长度
@@ -99,6 +119,10 @@ def feature_extract(data_set, type_name):
     :return: 一个dict 包含这个数据采集类型的原始数据,3种特征提取后的数据,特征拼接后的特征向量
             仍保持多次采集的数据放在一起
     """
+    global normalize_scale_collect
+    normalize_scale_collect = []
+    global standardize_scale_collect
+    standardize_scale_collect = []
     if type_name == 'emg':
         return __emg_feature_extract(data_set)
     data_set_rms_feat = []
@@ -122,6 +146,7 @@ def feature_extract(data_set, type_name):
         'append_all': data_set_append_feat
     }
 
+
 def feature_extract_single(data, type_name):
     data = length_adjust(data)
     window_amount = len(data) / WINDOW_SIZE
@@ -130,10 +155,6 @@ def feature_extract_single(data, type_name):
     win_index = 0
     is_first = True
     seg_all_feat = []
-    seg_ARC_feat = []
-    seg_RMS_feat = []
-    seg_ZC_feat = []
-
     for Win_Data in windows_data:
         # 依次处理每个window的数据
         win_RMS_feat = np.sqrt(np.mean(np.square(Win_Data), axis=0))
@@ -141,32 +162,24 @@ def feature_extract_single(data, type_name):
         win_ZC_feat = np.sum(np.sign(-np.sign(Win_Data) * np.sign(Win_Data1) + 1), axis=0) - 1
         win_ARC_feat = np.apply_along_axis(ARC, 0, Win_Data)
         # 将每个window特征提取的数据用vstack叠起来
-        if win_index == 0:
-            seg_RMS_feat = win_RMS_feat
-            seg_ZC_feat = win_ZC_feat
-            seg_ARC_feat = win_ARC_feat
-        else:
-            seg_RMS_feat = np.vstack((seg_RMS_feat, win_RMS_feat))
-            seg_ZC_feat = np.vstack((seg_ZC_feat, win_ZC_feat))
-            seg_ARC_feat = np.vstack((seg_ARC_feat, win_ARC_feat))
         win_index += 1
-
         # 将三种特征拼接成一个长向量
-        # 层叠 转置 遍历展开
+        # 层叠 遍历展开
         Seg_Feat = np.vstack((win_RMS_feat, win_ZC_feat, win_ARC_feat))
         All_Seg_Feat = Seg_Feat.ravel()
-
         if is_first:
             is_first = False
             seg_all_feat = All_Seg_Feat
         else:
             seg_all_feat = np.vstack((seg_all_feat, All_Seg_Feat))
 
-    seg_ARC_feat = normalize(seg_ARC_feat)
-    seg_RMS_feat = normalize(seg_RMS_feat)
-    seg_ZC_feat = normalize(seg_ZC_feat)
     seg_all_feat = normalize(seg_all_feat)
-
+    # seg_all_feat = np.abs(seg_all_feat)
+    seg_RMS_feat = seg_all_feat[:, 0:3]
+    seg_ZC_feat = seg_all_feat[:, 3:6]
+    seg_ARC_feat = seg_all_feat[:, 6:18]
+    seg_ARC_feat = np.hsplit(seg_ARC_feat, 4)
+    seg_ARC_feat = np.vstack(tuple(seg_ARC_feat))
     return seg_ARC_feat, seg_RMS_feat, seg_ZC_feat, seg_all_feat
 
 def ARC(Win_Data):
@@ -251,4 +264,3 @@ def eliminate_zero_shift(data):
     zero_point = np.array(zero_point)
     data -= zero_point
     return data
-

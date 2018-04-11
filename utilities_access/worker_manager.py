@@ -248,7 +248,7 @@ class MainWorkerThread(threading.Thread):
         # if self.curr_recognize_res is None:
         #     print("recognize has stopped , append task abandon")
         #     return
-        print('recognize_result: %s ' % str(data['res_text']))
+        print('recognize_result: %s \n' % str(data['res_text']))
         self.curr_recognize_res.append_recognize_result(data['res_text'],
                                                         data['middle_symbol'],
                                                         data['raw_data'])

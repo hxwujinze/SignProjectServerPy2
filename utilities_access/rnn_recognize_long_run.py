@@ -3,6 +3,7 @@ import json
 import os
 import pickle
 import threading
+import time
 
 import numpy as np
 import queue
@@ -42,8 +43,10 @@ class RecognizeQueue(threading.Thread):
         self.ignore_cnt = 0
         self.rnn_model = rnn_model
 
+
     def run(self):
         while not self.stop_flag.is_set():
+            time.sleep(0.01)
             while not self.data_queue.empty():
                 new_msg = self.data_queue.get()
                 if self.ignore_cnt != 0:
@@ -59,7 +62,6 @@ class RecognizeQueue(threading.Thread):
                     self.ignore_cnt = 7
                 res = json.dumps(res)
                 print(res)
-
     def add_new_data(self, data):
         self.data_queue.put(data)
 
@@ -87,15 +89,19 @@ def main():
                     rnn_model.eval()
                     break
 
+    data_mat_cnt = 0
+    recognize_data_history = []
+
     while True:
+        time.sleep(0.01)
         read_ = input()
         if read_ == 'end':
             if online_recognizer != '':
                 online_recognizer.stop_thread()
             break
 
-        data_file = read_
-        data_path = CURR_WORK_DIR + '\\' + data_file
+        data_file_name = read_
+        data_path = CURR_WORK_DIR + '\\' + data_file_name
         data_file = open(data_path, 'r+b')
 
         data_mat = pickle.load(data_file, encoding='iso-8859-1')
@@ -110,7 +116,20 @@ def main():
             res = json.dumps(res)
             print(res)
         else:
+
             online_recognizer.add_new_data(data_mat)
+            # 用于对比数据传入是否同步
+            data_history = {
+                'data_file_name': data_file_name,
+                'data_num': data_mat_cnt,
+            }
+            recognize_data_history.append(data_history)
+            data_mat_cnt += 1
+
+    file_ = open(CURR_DATA_DIR + '\\history_data_on_recognize', 'w')
+    file_.write(json.dumps(recognize_data_history, indent=2))
+    file_.close()
+
 
 if __name__ == '__main__':
     main()
