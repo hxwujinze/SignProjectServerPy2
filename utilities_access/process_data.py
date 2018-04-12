@@ -148,7 +148,7 @@ def feature_extract(data_set, type_name):
 
 
 def feature_extract_single(data, type_name):
-    data = length_adjust(data)
+    # data = length_adjust(data)
     window_amount = len(data) / WINDOW_SIZE
     # windows_data = data.reshape(window_amount, WINDOW_SIZE, TYPE_LEN[type_name])
     windows_data = np.vsplit(data[0:160], window_amount)
@@ -225,7 +225,11 @@ def append_single_data_feature(acc_data, gyr_data, emg_data):
 def wavelet_trans(data):
     data = np.array(data).T  # 转换为 通道 - 时序
     data = pywt.threshold(data, 30, mode='hard')  # 阈值滤波
-    data = pywt.wavedec(data, wavelet='db3', level=5)  # 小波变换
+    try:
+        data = pywt.wavedec(data, wavelet='db3', level=5)  # 小波变换
+    except ValueError:
+        # 若数据不够长 降低变换层数
+        data = pywt.wavedec(data, wavelet='db3', level=4)
     data = np.vstack((data[0].T, np.zeros(8))).T
     # 转换为 时序-通道 追加一个零点在转换回 通道-时序
     data = pywt.threshold(data, 20, mode='hard')  # 再次阈值滤波

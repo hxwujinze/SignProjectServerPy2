@@ -268,6 +268,9 @@ class MainWorkerThread(threading.Thread):
         self.recognize_process.stop_recognize()
         self.curr_process_request_id = -1
         print("recognize stopped ")
+        # 清空队列
+        while not self.message_q.empty():
+            self.message_q.get()
         self.put_message_into_queue(msg)
 
     task_maping = {

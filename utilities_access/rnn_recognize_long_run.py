@@ -13,7 +13,7 @@ from torch.autograd import Variable
 from RNN_model import LSTM
 
 CURR_WORK_DIR = os.path.dirname(__file__)
-CURR_DATA_DIR = CURR_WORK_DIR + '\\models_data'
+CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_data')
 
 
 # 取最大值 并且转换为int 用于处理rnn输出
@@ -42,6 +42,7 @@ class RecognizeQueue(threading.Thread):
         self.stop_flag = stop_flag
         self.ignore_cnt = 0
         self.rnn_model = rnn_model
+        self.recognize_data_history = []
 
 
     def run(self):
@@ -62,6 +63,27 @@ class RecognizeQueue(threading.Thread):
                     self.ignore_cnt = 7
                 res = json.dumps(res)
                 print(res)
+                # 添加数据并保存
+                # history = {
+                #     'index' : res['index'],
+                #     'time': time.time(),
+                #     'data': data_mat
+                # }
+                # self.recognize_data_history.append(history)
+
+        # 保存每次处理的数据mas
+        time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
+        file_name = os.path.join(CURR_DATA_DIR, 'history_recognized_data' + time_tag)
+        file_ = open(file_name, 'w')
+        file_.write(json.dumps(self.recognize_data_history, indent=2))
+        file_.close()
+
+        file_name = os.path.join(CURR_DATA_DIR, 'recognized_data_tag' + time_tag)
+        file_ = open(file_name, 'w')
+        file_.write(json.dumps(recognize_data_tag_history, indent=2))
+        file_.close()
+        self.recognize_data_history = []
+
     def add_new_data(self, data):
         self.data_queue.put(data)
 
@@ -73,7 +95,7 @@ def main():
     read_ = input()
     mode = read_
     stop_event = threading.Event()
-    online_recognizer = ''
+    online_recognizer = None
     rnn_model = LSTM()
     if mode == 'online':
         rnn_model.load_state_dict(torch.load(CURR_DATA_DIR + '\\online_model.pkl'))
@@ -90,18 +112,18 @@ def main():
                     break
 
     data_mat_cnt = 0
-    recognize_data_history = []
+
 
     while True:
         time.sleep(0.01)
         read_ = input()
         if read_ == 'end':
-            if online_recognizer != '':
+            if online_recognizer is None:
                 online_recognizer.stop_thread()
             break
 
         data_file_name = read_
-        data_path = CURR_WORK_DIR + '\\' + data_file_name
+        data_path = os.path.join(CURR_WORK_DIR, data_file_name)
         data_file = open(data_path, 'r+b')
 
         data_mat = pickle.load(data_file, encoding='iso-8859-1')
@@ -116,20 +138,16 @@ def main():
             res = json.dumps(res)
             print(res)
         else:
-
             online_recognizer.add_new_data(data_mat)
             # 用于对比数据传入是否同步
             data_history = {
                 'data_file_name': data_file_name,
                 'data_num': data_mat_cnt,
             }
-            recognize_data_history.append(data_history)
+            recognize_data_tag_history.append(data_history)
             data_mat_cnt += 1
 
-    file_ = open(CURR_DATA_DIR + '\\history_data_on_recognize', 'w')
-    file_.write(json.dumps(recognize_data_history, indent=2))
-    file_.close()
-
+recognize_data_tag_history = []
 
 if __name__ == '__main__':
     main()

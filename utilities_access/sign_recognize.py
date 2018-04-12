@@ -29,7 +29,7 @@ RNN_STATE = 566
 SVM_STATE = 852
 
 # todo 识别模式 online  offline
-RECOGNIZE_MODE = 'online'
+RECOGNIZE_MODE = 'offline'
 
 # todo 在这里进行更改识别算法
 CURR_CLASSIFY_STATE = RNN_STATE
@@ -421,7 +421,9 @@ class DataProcessor(threading.Thread):
 
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
+
         self.processed_data_history = []
+        self.processed_data_tags = []
 
     def run(self):
         data_mat_cnt = 0
@@ -433,6 +435,7 @@ class DataProcessor(threading.Thread):
                                                 emg_data=new_seg_data[2])
                 data_file_name = generate_data_seg_file(data_mat)
                 self.input_pipe.write(data_file_name + '\n')
+
                 # 历史数据保存的格式： 采集的时间 数据计数 数据内容
                 data_history = {
                     'time': time.time(),
@@ -440,14 +443,23 @@ class DataProcessor(threading.Thread):
                     'data_mat': data_mat,
                 }
                 self.processed_data_history.append(data_history)
+
+                self.processed_data_tags.append(data_file_name)
                 data_mat_cnt += 1
         self.input_pipe.write('end\n')
 
         # 每次停止在线识别时 将所有处理过的历史数据保存起来
         time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
-        file_ = open(CURR_DATA_DIR + '\\processed_data_history_' + time_tag, 'w+b')
+        file_name = os.path.join(CURR_DATA_DIR, 'processed_data_history_' + time_tag)
+        file_ = open(file_name, 'w+b')
         pickle.dump(self.processed_data_history, file_)
         file_.close()
+        # 保存tag
+        file_name = os.path.join(CURR_DATA_DIR, 'passed_data_tag' + time_tag)
+        file_ = open(file_name, 'w')
+        file_.write(json.dumps(self.processed_data_tags, indent=2))
+        file_.close()
+
 
 
 
@@ -483,8 +495,18 @@ class ResultReceiver(threading.Thread):
             res = self.output_pipe.readline()
             res = json.loads(res)
 
-            print(json.dumps(res, indent=2))
-
+            # 是空手语时直接跳过
+            if res['index'] == 13:
+                continue
+            print('**************************************')
+            print("online mode ")
+            print('recognize result:')
+            each_prob = 'each prob: \n' + res['each_prob']
+            print(each_prob)
+            print('max_prob: %s' % res['max_prob'])
+            print('index: %d' % res['index'])
+            print('raw_index: %d' % res['raw_index'])
+            print('**************************************')
             if res['info'] == 'skip this':
                 print('skip this')
                 continue
