@@ -44,6 +44,9 @@ class RecognizeQueue(threading.Thread):
         self.rnn_model = rnn_model
         self.recognize_data_history = []
 
+        self.result_vote = {}
+        self.is_active = False
+
 
     def run(self):
         while not self.stop_flag.is_set():
@@ -59,30 +62,58 @@ class RecognizeQueue(threading.Thread):
                 res['info'] = 'ok'
                 if res['max_prob'] < 0.90:
                     res['info'] = 'skip this'
-                elif res['raw_index'] != 13:
-                    self.ignore_cnt = 7
-                res = json.dumps(res)
-                print(res)
+
+                if not self.is_active:
+                    if res['raw_index'] != 13:
+                        self.is_active = True
+                        if self.result_vote.get(res['raw_index']) is None:
+                            cnt = 1
+                            self.result_vote[res['raw_index']] = [res, cnt]
+                        else:
+                            self.result_vote[res['raw_index']][1] += 1
+                else:
+                    if res['raw_index'] != 13:
+                        if self.result_vote.get(res['raw_index']) is None:
+                            cnt = 1
+                            self.result_vote[res['raw_index']] = [res, cnt]
+                        else:
+                            self.result_vote[res['raw_index']][1] += 1
+                    else:
+
+                        max_occur_time = -1
+                        max_occur_data = None
+                        for each in self.result_vote.values():
+                            if each[1] > max_occur_time:
+                                max_occur_time = each[1]
+                                max_occur_data = each[0]
+
+                        self.is_active = False
+                        self.result_vote = {}
+                        res_str = json.dumps(max_occur_data)
+                        print(res_str)
+
+                # res_str = json.dumps(res)
+                # print(res_str)
+
                 # 添加数据并保存
                 # history = {
-                #     'index' : res['index'],
+                #     'index': res['index'],
                 #     'time': time.time(),
                 #     'data': data_mat
                 # }
                 # self.recognize_data_history.append(history)
-
         # 保存每次处理的数据mas
-        time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
-        file_name = os.path.join(CURR_DATA_DIR, 'history_recognized_data' + time_tag)
-        file_ = open(file_name, 'w')
-        file_.write(json.dumps(self.recognize_data_history, indent=2))
-        file_.close()
-
-        file_name = os.path.join(CURR_DATA_DIR, 'recognized_data_tag' + time_tag)
-        file_ = open(file_name, 'w')
-        file_.write(json.dumps(recognize_data_tag_history, indent=2))
-        file_.close()
-        self.recognize_data_history = []
+        # time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
+        # file_name = os.path.join(CURR_DATA_DIR, 'history_recognized_data' + time_tag)
+        # file_ = open(file_name, 'w')
+        # file_.write(json.dumps(self.recognize_data_history, indent=2))
+        # file_.close()
+        #
+        # file_name = os.path.join(CURR_DATA_DIR, 'recognized_data_tag' + time_tag)
+        # file_ = open(file_name, 'w')
+        # file_.write(json.dumps(recognize_data_tag_history, indent=2))
+        # file_.close()
+        # self.recognize_data_history = []
 
     def add_new_data(self, data):
         self.data_queue.put(data)
@@ -150,4 +181,5 @@ def main():
 recognize_data_tag_history = []
 
 if __name__ == '__main__':
+    # pass
     main()

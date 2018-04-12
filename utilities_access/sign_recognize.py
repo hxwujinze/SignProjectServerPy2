@@ -7,7 +7,7 @@ import pickle
 import random
 import threading
 import time
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, STDOUT
 
 import numpy as np
 from myo.lowlevel import VibrationType
@@ -28,8 +28,7 @@ MAX_CAPTURE_TIME = 60
 RNN_STATE = 566
 SVM_STATE = 852
 
-# todo 识别模式 online  offline
-RECOGNIZE_MODE = 'offline'
+
 
 # todo 在这里进行更改识别算法
 CURR_CLASSIFY_STATE = RNN_STATE
@@ -102,6 +101,9 @@ class RecognizeWorker(multiprocessing.Process):
         self.pipe_input = None
         self.pipe_output = None
 
+        # todo 这里设置识别模式 在线online 离线offline
+        self.RECOGNIZE_MODE = 'online'
+
 
     #  setting start recognize flag
     def start_recognize(self):
@@ -109,6 +111,12 @@ class RecognizeWorker(multiprocessing.Process):
 
     def stop_recognize(self):
         self.recognize_status.clear()
+
+    def set_online_recognize_mode(self, online):
+        if online:
+            self.RECOGNIZE_MODE = 'online'
+        else:
+            self.RECOGNIZE_MODE = 'offline'
 
     def _stop_recognize(self, stop_type):
         self.recognize_status.clear()
@@ -143,11 +151,10 @@ class RecognizeWorker(multiprocessing.Process):
             self.pipe_input, self.pipe_output, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
 
-        if RECOGNIZE_MODE == 'online':
-            self.online_recognizer = OnlineRecognizer(self.message_q,
-                                                      self.pipe_input,
-                                                      self.pipe_output)
-        self.pipe_input.write(RECOGNIZE_MODE + '\n')
+        self.online_recognizer = OnlineRecognizer(self.message_q,
+                                                  self.pipe_input,
+                                                  self.pipe_output)
+        self.pipe_input.write(self.RECOGNIZE_MODE + '\n')
 
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
@@ -167,7 +174,7 @@ class RecognizeWorker(multiprocessing.Process):
                         break
                     curr_time = time.time()
 
-                    if RECOGNIZE_MODE == 'offline':
+                    if self.RECOGNIZE_MODE == 'offline':
                         self.offline_recognize()
                     else:
                         self.online_recognize()
@@ -222,7 +229,7 @@ class RecognizeWorker(multiprocessing.Process):
                 cap_start_time = time.clock()
 
         # 结束一次采集后  将历史数据保存起来
-        self.online_recognizer.store_raw_history_data()
+        # self.online_recognizer.store_raw_history_data()
 
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -583,7 +590,7 @@ def generate_recognize_subprocces():
     rnn_sub_process = Popen(args=command,
                             shell=True,
                             stdin=PIPE,
-                            stderr=PIPE,
+                            stderr=STDOUT,
                             stdout=PIPE,
                             universal_newlines=True)
     pipe_input = rnn_sub_process.stdin
