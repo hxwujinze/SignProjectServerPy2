@@ -1,108 +1,16 @@
 # coding:utf-8
-# py3
-import os
 
-import matplotlib as mpl
 import numpy as np
 import pywt
-from matplotlib import font_manager
 from sklearn import preprocessing
 
-Width_EMG = 9
-Width_ACC = 3
-Width_GYR = 3
-LENGTH = 160
+
 WINDOW_SIZE = 16
-EMG_WINDOW_SIZE = 3
-SIGN_COUNT = 14
-FEATURE_LENGTH = 44
-DATA_DIR_PATH = os.getcwd() + '\\data'
-
-myfont = font_manager.FontProperties(fname='C:/Windows/Fonts/msyh.ttc')
-mpl.rcParams['axes.unicode_minus'] = False
-
 TYPE_LEN = {
     'acc': 3,
     'gyr': 3,
     'emg': 8
 }
-
-CAP_TYPE_LIST = ['acc', 'gyr', 'emg']  # 直接在这里修改可去除emg
-# CAP_TYPE_LIST = ['acc', 'gyr', 'emg']
-GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',
-                  '老师 ', '发烧 ', '谢谢 ', '空手语', '大家', '支持', '我们', '创新', '医生', '交流',
-                  '团队', '帮助', '聋哑人', '请', ]
-
-def length_adjust(A):
-    tail_len = len(A) - LENGTH
-    if tail_len < 0:
-        print('Length Error')
-        A1 = A
-    else:
-        # 前后各去掉多出来长度的一半
-        End = len(A) - tail_len / 2
-        Begin = tail_len / 2
-        A1 = A[int(Begin):int(End), :]
-    return A1
-
-def trans_data_to_time_seqs(data_set):
-    return data_set.T
-
-
-normalize_scaler = preprocessing.MinMaxScaler()
-def normalize(data):
-    normalize_scaler.fit(data)
-    scale_adjust()
-    data = normalize_scaler.transform(data)
-    return data
-
-standardize_scaler = preprocessing.StandardScaler()
-def standardize(data):
-    standardize_scaler.fit(data)
-    data = standardize_scaler.transform(data)
-    standardize_scale_collect.append([each for each in standardize_scaler.scale_])
-    return data
-
-def scale_adjust():
-    """
-    根据scale的情况判断是否需要进行scale
-    scale的大小是由这个数据的max - min的得出 如果相差不大 就不进行scale
-    通过修改scale和min的值使其失去scale的作用
-
-    note: scale 的大小时max - min 的倒数
-    """
-    curr_scale = normalize_scaler.scale_
-    curr_min = normalize_scaler.min_
-
-    for each_val in range(len(curr_scale)):
-        if curr_scale[each_val] > 1:
-            curr_scale[each_val] = 1
-        if abs(curr_min[each_val]) < 2:
-            curr_min[each_val] = 0
-
-
-
-
-def emg_feature_extract(data_set):
-    return __emg_feature_extract(data_set)['trans']
-
-def __emg_feature_extract(data_set):
-    """
-    特征提取
-    :param data_set: 来自Load_From_File过程的返回值 一个dict
-                     包含一个手语 三种采集数据类型的 多次采集过程的数据
-    :param type_name: 数据采集的类型 决定nparray的长度
-    :return: 一个dict 包含这个数据采集类型的原始数据,3种特征提取后的数据,特征拼接后的特征向量
-            仍保持多次采集的数据放在一起
-    """
-    data_trans = emg_wave_trans(data_set['emg'])
-    return {
-        'type_name': 'emg',
-        'raw': data_set['emg'],
-        'trans': data_trans,
-        'append_all': data_trans,
-    }
-
 
 '''
 提取一个手势的一个batch的某一信号种类的全部数据
@@ -110,9 +18,17 @@ def __emg_feature_extract(data_set):
 （特征提取会改变数据的数量）
 '''
 
+# data process func for online
+
 def feature_extract(data_set, type_name):
     """
-    特征提取
+    特征提取 并进行必要的归一化
+
+    acc gyr数据的三种特征量纲相差不大 且有某些维度全局的值都很相近的情况
+    于是暂时去除归一化的操作 拟对只对数据变化较大，且变化范围较大于1的数据维度进行部分归一化
+
+    emg数据照常进行各种处理
+
     :param data_set: 来自Load_From_File过程的返回值 一个dict
                      包含一个手语 三种采集数据类型的 多次采集过程的数据
     :param type_name: 数据采集的类型 决定nparray的长度
@@ -146,12 +62,12 @@ def feature_extract(data_set, type_name):
         'append_all': data_set_append_feat
     }
 
-
 def feature_extract_single(data, type_name):
-    # data = length_adjust(data)
+    if len(data) != 160 or len(data) != 128:
+        raise Exception('data len not satisfy')
     window_amount = len(data) / WINDOW_SIZE
     # windows_data = data.reshape(window_amount, WINDOW_SIZE, TYPE_LEN[type_name])
-    windows_data = np.vsplit(data[0:160], window_amount)
+    windows_data = np.vsplit(data, window_amount)
     win_index = 0
     is_first = True
     seg_all_feat = []
@@ -221,15 +137,30 @@ def append_single_data_feature(acc_data, gyr_data, emg_data):
             batch_mat = np.vstack((batch_mat, line))
     return batch_mat
 
+# emg data_process
+def emg_feature_extract(data_set):
+    return __emg_feature_extract(data_set)['trans']
+
+def __emg_feature_extract(data_set):
+    """
+    特征提取
+    :param data_set: 来自Load_From_File过程的返回值 一个dict
+                     包含一个手语 三种采集数据类型的 多次采集过程的数据
+    :return: 一个dict 包含这个数据采集类型的原始数据,3种特征提取后的数据,特征拼接后的特征向量
+            仍保持多次采集的数据放在一起
+    """
+    data_trans = emg_wave_trans(data_set['emg'])
+    return {
+        'type_name': 'emg',
+        'raw': data_set['emg'],
+        'trans': data_trans,
+        'append_all': data_trans,
+    }
 
 def wavelet_trans(data):
     data = np.array(data).T  # 转换为 通道 - 时序
     data = pywt.threshold(data, 30, mode='hard')  # 阈值滤波
-    try:
-        data = pywt.wavedec(data, wavelet='db3', level=5)  # 小波变换
-    except ValueError:
-        # 若数据不够长 降低变换层数
-        data = pywt.wavedec(data, wavelet='db3', level=4)
+    data = pywt.wavedec(data, wavelet='db3', level=5)  # 小波变换
     data = np.vstack((data[0].T, np.zeros(8))).T
     # 转换为 时序-通道 追加一个零点在转换回 通道-时序
     data = pywt.threshold(data, 20, mode='hard')  # 再次阈值滤波
@@ -268,3 +199,48 @@ def eliminate_zero_shift(data):
     zero_point = np.array(zero_point)
     data -= zero_point
     return data
+
+# data scaling
+normalize_scaler = preprocessing.MinMaxScaler()
+normalize_scale_collect = []
+
+def normalize(data):
+    normalize_scaler.fit(data)
+    scale_adjust()
+    data = normalize_scaler.transform(data)
+    # 记录每次的scale情况
+    curr_scale = [each for each in normalize_scaler.scale_]
+    normalize_scale_collect.append(curr_scale)
+    return data
+
+def scale_adjust():
+    """
+    根据scale的情况判断是否需要进行scale
+    scale的大小是由这个数据的max - min的得出 如果相差不大 就不进行scale
+    通过修改scale和min的值使其失去scale的作用
+
+    note: scale 的大小是max - min 的倒数
+    """
+    curr_scale = normalize_scaler.scale_
+    curr_min = normalize_scaler.min_
+
+    for each_val in range(len(curr_scale)):
+        if curr_scale[each_val] > 1:
+            curr_scale[each_val] = 1
+            curr_min[each_val] = 0
+        # if abs(curr_min[each_val]) < 50:
+        # curr_min[each_val] = 0
+
+def get_feat_norm_scales():
+    # 0 ARC 1 RMS 2 ZC 3 ALL
+    feat_name = ['arc', 'rms', 'zc', 'all']
+    scales = {
+        'arc': [],
+        'rms': [],
+        'zc': [],
+        'all': [],
+    }
+    for each in normalize_scale_collect:
+        feat_no = normalize_scale_collect.index(each) % 4
+        scales[feat_name[feat_no]].append(each)
+    return scales

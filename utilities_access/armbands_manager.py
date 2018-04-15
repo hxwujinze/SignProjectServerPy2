@@ -1,5 +1,4 @@
 # coding:utf-8
-import json
 import os
 import threading
 
@@ -70,7 +69,7 @@ class Armband:
         return self.is_occupy
 
     def __str__(self):
-        return u'armband_id: %s myo_obj: %s is_occupied: %s connect_time %s' % \
+        return u'armband_id: %s\nmyo_obj: %s\nis_occupied: %s\nconnect_time: %s' % \
                (self.armband_id, self.myo_obj, str(self.is_occupied()), str(self.myo_obj.connect_time))
 
     def __cmp__(self, other):
@@ -117,8 +116,9 @@ def update_connected_list():
         connect_time_obj_map[time_tag] = each_armband
 
     lock.release()
-    print("curr armbands list ")
-    print(json.dumps([str(each) for each in armbands_connected], indent=2))
+    print("curr armbands list :")
+    for each in armbands_connected:
+        print(str(each) + '\n')
 
 """
 占用手环

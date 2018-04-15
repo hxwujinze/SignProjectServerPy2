@@ -7,7 +7,7 @@ import pickle
 import random
 import threading
 import time
-from subprocess import Popen, PIPE, STDOUT
+from subprocess import Popen, PIPE
 
 import numpy as np
 from myo.lowlevel import VibrationType
@@ -148,8 +148,11 @@ class RecognizeWorker(multiprocessing.Process):
         for each in armbands_timetag:
             self.paired_armbands.append(armbands_manager.connect_time_obj_map[each])
         if self.rnn_recg_proc is None:
-            self.pipe_input, self.pipe_output, self.rnn_recg_proc = \
+            self.pipe_input, self.pipe_output, err_pipe, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
+
+            err_printer = ErrorOutputListener(self.outer_event, err_pipe)
+            err_printer.start()
 
         self.online_recognizer = OnlineRecognizer(self.message_q,
                                                   self.pipe_input,
@@ -181,6 +184,7 @@ class RecognizeWorker(multiprocessing.Process):
 
         print("recognize thread stopped\n")
         self.pipe_input.write('end\n')
+        self.rnn_recg_proc.terminate()
 
     # 离线识别 先采集足够的数据 在进行识别
     def offline_recognize(self):
@@ -229,7 +233,7 @@ class RecognizeWorker(multiprocessing.Process):
                 cap_start_time = time.clock()
 
         # 结束一次采集后  将历史数据保存起来
-        # self.online_recognizer.store_raw_history_data()
+        self.online_recognizer.store_raw_history_data()
 
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -364,8 +368,6 @@ class OnlineRecognizer:
         # 分别对应 acc gyr emg
         self.data_buffer = ([], [], [])
 
-
-
         # 数据处理线程 将采集的数据进行特征提取 scale 等工作
         self.data_processor = DataProcessor(pipe_input,
                                             pipe_output,
@@ -407,13 +409,14 @@ class OnlineRecognizer:
         # 便于之后的分析
         data_history = {
             'acc': self.data_buffer[0],
-            'gry': self.data_buffer[1],
+            'gyr': self.data_buffer[1],
             'emg': self.data_buffer[2]
         }
         time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
         file_ = open(CURR_DATA_DIR + '\\raw_data_history_' + time_tag, 'w+b')
         pickle.dump(data_history, file_)
         file_.close()
+        self.data_buffer = ([], [], [])
 
     def stop_recognize(self):
         self.stop_flag.set()
@@ -435,6 +438,7 @@ class DataProcessor(threading.Thread):
     def run(self):
         data_mat_cnt = 0
         while not self.stop_flag.isSet():
+            time.sleep(0.08)
             while not self.new_data_queue.empty():
                 new_seg_data = self.new_data_queue.get()
                 data_mat = self.create_data_seg(acc_data=new_seg_data[0],
@@ -443,32 +447,8 @@ class DataProcessor(threading.Thread):
                 data_file_name = generate_data_seg_file(data_mat)
                 self.input_pipe.write(data_file_name + '\n')
 
-                # 历史数据保存的格式： 采集的时间 数据计数 数据内容
-                data_history = {
-                    'time': time.time(),
-                    'data_nu': data_mat_cnt,
-                    'data_mat': data_mat,
-                }
-                self.processed_data_history.append(data_history)
-
-                self.processed_data_tags.append(data_file_name)
                 data_mat_cnt += 1
         self.input_pipe.write('end\n')
-
-        # 每次停止在线识别时 将所有处理过的历史数据保存起来
-        time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
-        file_name = os.path.join(CURR_DATA_DIR, 'processed_data_history_' + time_tag)
-        file_ = open(file_name, 'w+b')
-        pickle.dump(self.processed_data_history, file_)
-        file_.close()
-        # 保存tag
-        file_name = os.path.join(CURR_DATA_DIR, 'passed_data_tag' + time_tag)
-        file_ = open(file_name, 'w')
-        file_.write(json.dumps(self.processed_data_tags, indent=2))
-        file_.close()
-
-
-
 
     @staticmethod
     def create_data_seg(acc_data, gyr_data, emg_data):
@@ -500,6 +480,8 @@ class ResultReceiver(threading.Thread):
     def run(self):
         while not self.stop_flag.is_set():
             res = self.output_pipe.readline()
+            if res == '':
+                continue
             res = json.loads(res)
 
             # 是空手语时直接跳过
@@ -533,6 +515,22 @@ class ResultReceiver(threading.Thread):
                           data=data)
             if not self.stop_flag.is_set():
                 self.message_q.put(msg)
+
+class ErrorOutputListener(threading.Thread):
+    def __init__(self, stop_flag, pipe):
+        threading.Thread.__init__(self, name='Err listening thread')
+        self.stop_flag = stop_flag
+        self.pipe = pipe
+
+    def run(self):
+        while not self.stop_flag.is_set():
+            err_info = self.pipe.readlines()
+            if len(err_info) != 0:
+                print('rnn subprocess error info:')
+                for each_line in err_info:
+                    if each_line != '':
+                        print(each_line)
+
 
 def vstack_data(target, step_data):
     step_data = np.array(step_data)
@@ -590,13 +588,14 @@ def generate_recognize_subprocces():
     rnn_sub_process = Popen(args=command,
                             shell=True,
                             stdin=PIPE,
-                            stderr=STDOUT,
+                            stderr=PIPE,
                             stdout=PIPE,
                             universal_newlines=True)
     pipe_input = rnn_sub_process.stdin
     pipe_output = rnn_sub_process.stdout
+    pipe_err = rnn_sub_process.stderr
     print('pid %d' % rnn_sub_process.pid)
-    return pipe_input, pipe_output, rnn_sub_process
+    return pipe_input, pipe_output, pipe_err, rnn_sub_process
 
 def generate_data_seg_file(data_mat):
     data_id = random.randint(222, 9999999)

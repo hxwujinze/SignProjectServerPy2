@@ -49,8 +49,11 @@ class RecognizeQueue(threading.Thread):
 
 
     def run(self):
+        time_tag = time.strftime("%H_%M_%S", time.localtime(time.time()))
+        file_name = os.path.join(CURR_DATA_DIR, 'history_recognized_data_' + time_tag)
         while not self.stop_flag.is_set():
             time.sleep(0.01)
+            # 保存每次处理的数据mas
             while not self.data_queue.empty():
                 new_msg = self.data_queue.get()
                 if self.ignore_cnt != 0:
@@ -63,8 +66,24 @@ class RecognizeQueue(threading.Thread):
                 if res['max_prob'] < 0.90:
                     res['info'] = 'skip this'
 
+                # 添加数据并保存
+                # 识别出手语的id
+                # 时间tag 以及识别时采集下来的数据
+                # 时间tag可用于排序
+
+                history = {
+                    'index': res['raw_index'],
+                    'time': time.clock(),
+                    'data': data_mat.data.numpy()[0]
+                    # 这里的pytorch 2 numpy转化会将data转换为一个三维数组 但里面只有一个二维面
+                    # 使用一个index取出这个二维面
+
+                }
+
                 if not self.is_active:
                     if res['raw_index'] != 13:
+                        self.recognize_data_history.append(history)
+
                         self.is_active = True
                         if self.result_vote.get(res['raw_index']) is None:
                             cnt = 1
@@ -73,6 +92,8 @@ class RecognizeQueue(threading.Thread):
                             self.result_vote[res['raw_index']][1] += 1
                 else:
                     if res['raw_index'] != 13:
+                        self.recognize_data_history.append(history)
+
                         if self.result_vote.get(res['raw_index']) is None:
                             cnt = 1
                             self.result_vote[res['raw_index']] = [res, cnt]
@@ -89,40 +110,26 @@ class RecognizeQueue(threading.Thread):
 
                         self.is_active = False
                         self.result_vote = {}
-                        res_str = json.dumps(max_occur_data)
-                        print(res_str)
+                        if max_occur_time != 1:
+                            res_str = json.dumps(max_occur_data)
+                            print(res_str)
 
-                # res_str = json.dumps(res)
-                # print(res_str)
+                        file_ = open(file_name, 'wb')
+                        pickle.dump(self.recognize_data_history, file_)
+                        file_.close()
 
-                # 添加数据并保存
-                # history = {
-                #     'index': res['index'],
-                #     'time': time.time(),
-                #     'data': data_mat
-                # }
-                # self.recognize_data_history.append(history)
-        # 保存每次处理的数据mas
-        # time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
-        # file_name = os.path.join(CURR_DATA_DIR, 'history_recognized_data' + time_tag)
-        # file_ = open(file_name, 'w')
-        # file_.write(json.dumps(self.recognize_data_history, indent=2))
-        # file_.close()
-        #
-        # file_name = os.path.join(CURR_DATA_DIR, 'recognized_data_tag' + time_tag)
-        # file_ = open(file_name, 'w')
-        # file_.write(json.dumps(recognize_data_tag_history, indent=2))
-        # file_.close()
-        # self.recognize_data_history = []
 
     def add_new_data(self, data):
         self.data_queue.put(data)
 
+
     def stop_thread(self):
         self.stop_flag.set()
 
+
 def main():
     # load model
+
     read_ = input()
     mode = read_
     stop_event = threading.Event()
@@ -146,11 +153,11 @@ def main():
 
 
     while True:
-        time.sleep(0.01)
         read_ = input()
         if read_ == 'end':
-            if online_recognizer is None:
+            if online_recognizer is not None:
                 online_recognizer.stop_thread()
+            print("")
             break
 
         data_file_name = read_
