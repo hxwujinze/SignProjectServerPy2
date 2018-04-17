@@ -160,7 +160,10 @@ def __emg_feature_extract(data_set):
 def wavelet_trans(data):
     data = np.array(data).T  # 转换为 通道 - 时序
     data = pywt.threshold(data, 30, mode='hard')  # 阈值滤波
-    data = pywt.wavedec(data, wavelet='db3', level=5)  # 小波变换
+    try:
+        data = pywt.wavedec(data, wavelet='db3', level=5)  # 小波变换
+    except ValueError:
+        data = pywt.wavedec(data, wavelet='db3', level=4)
     data = np.vstack((data[0].T, np.zeros(8))).T
     # 转换为 时序-通道 追加一个零点在转换回 通道-时序
     data = pywt.threshold(data, 20, mode='hard')  # 再次阈值滤波
@@ -200,10 +203,24 @@ def eliminate_zero_shift(data):
     data -= zero_point
     return data
 
+def expand_emg_data(data):
+    expnded = []
+    for each_data in data:
+        each_data_expand = expand_emg_data_single(each_data)
+        expnded.append(np.array(each_data_expand))
+    return expnded
+
+def expand_emg_data_single(data):
+    each_data_expand = []
+    for each_dot in range(len(data)):
+        for time in range(16):
+            each_data_expand.append(data[each_dot][:])
+    return each_data_expand
+
+
 # data scaling
 normalize_scaler = preprocessing.MinMaxScaler()
 normalize_scale_collect = []
-
 def normalize(data):
     normalize_scaler.fit(data)
     scale_adjust()

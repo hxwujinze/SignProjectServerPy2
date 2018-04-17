@@ -1,5 +1,4 @@
 # coding:utf-8
-import Queue
 import json
 import multiprocessing
 import os
@@ -9,6 +8,7 @@ import threading
 import time
 from subprocess import Popen, PIPE
 
+import Queue
 import numpy as np
 from myo.lowlevel import VibrationType
 from sklearn.externals import joblib
@@ -52,9 +52,9 @@ TYPE_LEN = {
 }
 CAP_TYPE_LIST = ['acc', 'emg', 'gyr']
 
-GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',
-                  '老师 ', '发烧 ', '谢谢 ', '', '大家 ', '支持 ', '我们 ', '创新 ', '医生 ', '交流 ',
-                  '团队 ', '帮助 ', '聋哑人 ', '请 ']
+GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',  # 0-9
+                  '老师 ', '发烧 ', '谢谢 ', '', '大家 ', '支持 ', '我们 ', '创新 ', '医生 ', '交流 ',  # 10 - 19
+                  '团队 ', '帮助 ', '聋哑人 ', '请 ']  # 20 - 23
 queue_lock = multiprocessing.Lock()
 
 
@@ -401,8 +401,8 @@ class OnlineRecognizer:
             new_data_seg = [each_cap_type_buffer[self.window_start:self.window_end]
                             for each_cap_type_buffer in self.data_buffer]
             self.data_processor.new_data_queue.put(new_data_seg)
-            self.window_end += 16
-            self.window_start += 16
+            self.window_end += 8
+            self.window_start += 8
 
     def store_raw_history_data(self):
         # 将buffer内的数据作为原始的历史采集数据进行保存
@@ -455,17 +455,12 @@ class DataProcessor(threading.Thread):
         acc_data = np.array(acc_data)
         gyr_data = np.array(gyr_data)
         emg_data = np.array(emg_data)
-        acc_data = process_data.feature_extract_single(acc_data, 'acc')
-        gyr_data = process_data.feature_extract_single(gyr_data, 'gyr')
         emg_data = process_data.wavelet_trans(emg_data)
-        # 选取三种特性拼接后的结果
-        acc_data_appended = acc_data[3]
-        gyr_data_appended = gyr_data[3]
-        emg_data_appended = emg_data
-        # 再将三种采集类型进行拼接
-        data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
-                                                           gyr_data=gyr_data_appended,
-                                                           emg_data=emg_data_appended)
+        emg_data = process_data.expand_emg_data_single(emg_data)
+        # 将三种采集类型进行拼接
+        data_mat = process_data.append_single_data_feature(acc_data=acc_data,
+                                                           gyr_data=gyr_data,
+                                                           emg_data=emg_data)
         return data_mat
 
 
@@ -490,31 +485,27 @@ class ResultReceiver(threading.Thread):
             print('**************************************')
             print("online mode ")
             print('recognize result:')
-            each_prob = 'each prob: \n' + res['each_prob']
-            print(each_prob)
-            print('max_prob: %s' % res['max_prob'])
+            print('diff: %s' % res['diff'])
             print('index: %d' % res['index'])
-            print('raw_index: %d' % res['raw_index'])
+            print('verify_result: %s' % res['verify_result'])
             print('**************************************')
-            if res['info'] == 'skip this':
-                print('skip this')
-                continue
-            sign_index = res['raw_index']
-            raw_capture_data = {
-                'acc': [],
-                'emg': [],
-                'gyr': [],
-            }
-            data = {
-                'res_text': GESTURES_TABLE[sign_index],
-                'middle_symbol': sign_index,
-                'raw_data': raw_capture_data
-            }
-            # 向主线程返回识别的结果
-            msg = Message(control='append_recognize_result',
-                          data=data)
-            if not self.stop_flag.is_set():
-                self.message_q.put(msg)
+            sign_index = res['index']
+            if res['verify_result'] == 'True':
+                raw_capture_data = {
+                    'acc': [],
+                    'emg': [],
+                    'gyr': [],
+                }
+                data = {
+                    'res_text': GESTURES_TABLE[sign_index],
+                    'middle_symbol': sign_index,
+                    'raw_data': raw_capture_data
+                }
+                # 向主线程返回识别的结果
+                msg = Message(control='append_recognize_result',
+                              data=data)
+                if not self.stop_flag.is_set():
+                    self.message_q.put(msg)
 
 class ErrorOutputListener(threading.Thread):
     def __init__(self, stop_flag, pipe):
@@ -583,7 +574,7 @@ def ARC3ord(Orin_Array):
 def generate_recognize_subprocces():
     # init recognize process
     target_python_dir = PYTORCH_INTP_PATH
-    target_script_dir = CURR_WORK_DIR + '\\rnn_recognize_long_run.py'
+    target_script_dir = CURR_WORK_DIR + '\\recognize_long_run.py'
     command = target_python_dir + ' ' + target_script_dir
     rnn_sub_process = Popen(args=command,
                             shell=True,
@@ -598,7 +589,7 @@ def generate_recognize_subprocces():
     return pipe_input, pipe_output, pipe_err, rnn_sub_process
 
 def generate_data_seg_file(data_mat):
-    data_id = random.randint(222, 9999999)
+    data_id = random.randint(0, 9999999)
     data_file_name = str(data_id) + '.data'
     data_path = CURR_WORK_DIR + '\\' + data_file_name
     file_ = open(data_path, 'w+b')
