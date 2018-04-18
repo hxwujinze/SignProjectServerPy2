@@ -163,7 +163,7 @@ class MainWorkerThread(threading.Thread):
                 self.dispatch(msg)
             else:
                 queue_lock.release()
-            time.sleep(0.1)
+            time.sleep(0.04)
 
     '''
     实际收到的是个json数据包 ，先进行解包，转换为python对象（下面代码中的Message类）
@@ -248,7 +248,7 @@ class MainWorkerThread(threading.Thread):
         # if self.curr_recognize_res is None:
         #     print("recognize has stopped , append task abandon")
         #     return
-        print('recognize_result: %s ' % str(data['res_text']))
+        print('recognize_result: %s \n' % str(data['res_text']))
         self.curr_recognize_res.append_recognize_result(data['res_text'],
                                                         data['middle_symbol'],
                                                         data['raw_data'])
@@ -268,6 +268,9 @@ class MainWorkerThread(threading.Thread):
         self.recognize_process.stop_recognize()
         self.curr_process_request_id = -1
         print("recognize stopped ")
+        # 清空队列
+        while not self.message_q.empty():
+            self.message_q.get()
         self.put_message_into_queue(msg)
 
     task_maping = {
@@ -318,7 +321,7 @@ class ListenerThread(threading.Thread):
         while not self.outer_event.is_set():
             # 不阻塞 1s查看一次状态
             try:
-                self.listened_socket.settimeout(0.8)
+                self.listened_socket.settimeout(0.2)
                 get = self.listened_socket.recv(128)
                 if get != b'':
                     print("receive text %s" % get)
