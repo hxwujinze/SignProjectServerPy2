@@ -1,9 +1,14 @@
-# coding:utf-8
+
 import torch.nn as nn
 import torch.nn.functional as F
 
-BATCH_SIZE = 128
-EPOCH = 1161
+"""
+超参数
+每次调整模型修改这里
+修改完成进行部署时直接将该文件复制到服务器目录
+"""
+BATCH_SIZE = 64
+EPOCH = 1100
 NNet_SIZE = 30
 NNet_LEVEL = 3
 NNet_output_size = 24
@@ -39,5 +44,5 @@ class LSTM(nn.Module):
         out = self.out(out[:, -1, :])
         out = F.relu(out)
         out2 = self.out2(out)
-        out2 = F.softmax(out2, dim=1)
+        out2 = F.softmax(out2)
         return out2

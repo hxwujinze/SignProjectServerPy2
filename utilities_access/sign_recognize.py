@@ -1,4 +1,5 @@
 # coding:utf-8
+import Queue
 import json
 import multiprocessing
 import os
@@ -8,7 +9,6 @@ import threading
 import time
 from subprocess import Popen, PIPE
 
-import Queue
 import numpy as np
 from myo.lowlevel import VibrationType
 from sklearn.externals import joblib
@@ -316,9 +316,9 @@ class RecognizeWorker(multiprocessing.Process):
         acc_data = process_data.feature_extract_single(self.ACC_captured_data, 'acc')
         gyr_data = process_data.feature_extract_single(self.GYR_captured_data, 'gyr')
         emg_data = process_data.wavelet_trans(self.EMG_captured_data)
-        # 选取三种特性拼接后的结果
-        acc_data_appended = acc_data[3]
-        gyr_data_appended = gyr_data[3]
+        # 选取三种特性拼接后的结果/
+        acc_data_appended = acc_data[4]
+        gyr_data_appended = gyr_data[4]
         emg_data_appended = emg_data
         # 再将三种采集类型进行拼接
         data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
@@ -457,6 +457,8 @@ class DataProcessor(threading.Thread):
         acc_data = np.array(acc_data)
         gyr_data = np.array(gyr_data)
         emg_data = np.array(emg_data)
+        acc_data = process_data.feature_extract_single_polyfit(acc_data, 2)
+        gyr_data = process_data.feature_extract_single_polyfit(gyr_data, 2)
         emg_data = process_data.wavelet_trans(emg_data)
         emg_data = process_data.expand_emg_data_single(emg_data)
         # 将三种采集类型进行拼接
