@@ -10,10 +10,14 @@ import torch.nn.functional as F
 LEARNING_RATE = 0.0005
 WEIGHT_DECAY = 0.0000002
 EPOCH = 500
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 
 class SiameseNetwork(nn.Module):
     def __init__(self, train=True):
+        """
+        用于生成vector 进行识别结果验证
+        :param train: 设置是否为train 模式
+        """
         nn.Module.__init__(self)
         if train:
             self.status = 'train'
@@ -21,13 +25,13 @@ class SiameseNetwork(nn.Module):
             self.status = 'eval'
 
         self.cnn1 = nn.Sequential(
-            nn.Conv1d(  # 14 x 128
+            nn.Conv1d(  # 14 x 64
                 in_channels=14,
                 out_channels=28,
                 kernel_size=8,
                 padding=4,
-                stride=4,
-            ),
+                stride=2,
+            ),  # 28 x 32
             nn.ReLU(),
             # todo need Norm ? yes
             nn.BatchNorm1d(28),  # 28 x 32
@@ -40,19 +44,17 @@ class SiameseNetwork(nn.Module):
                 kernel_size=4,
                 padding=2,
                 stride=1
-            ),
+            ),  # 32 x 16
             nn.ReLU(),
-            nn.BatchNorm1d(32),  # 32 x 32
-            nn.MaxPool1d(kernel_size=2),  # 32 x 10
+            # nn.BatchNorm1d(32),  # 32 x 16
+            # nn.MaxPool1d(kernel_size=2),  # 32 x 8
         )
 
         self.out = nn.Sequential(
-            # nn.Linear(32 * 34 , 128), 没有池化层 输出长度是34
-            nn.Linear(32 * 8, 128),
+            nn.Dropout(0.25),
+            nn.Linear(32 * 17, 256),
             nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32)
+            nn.Linear(256, 128),
         )
 
     def forward_once(self, x):
@@ -62,6 +64,10 @@ class SiameseNetwork(nn.Module):
         return out
 
     def forward(self, *xs):
+        """
+        train 模式输出两个vector 进行对比
+        eval 模式输出一个vector
+        """
         if self.status == 'train':
             out1 = self.forward_once(xs[0])
             out2 = self.forward_once(xs[1])
@@ -71,6 +77,7 @@ class SiameseNetwork(nn.Module):
 
 class ContrastiveLoss(torch.nn.Module):
     """
+    损失函数 用于PB
     Contrastive loss function.
     Based on: http://yann.lecun.com/exdb/publis/pdf/hadsell-chopra-lecun-06.pdf
     """

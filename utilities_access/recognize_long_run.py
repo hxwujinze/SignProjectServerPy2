@@ -13,7 +13,7 @@ from torch.autograd import Variable
 
 from CNN_model import RawInputCNN, get_max_index
 from RNN_model import LSTM
-from verify_networks import SiameseNetwork
+from verify_model import SiameseNetwork
 
 CURR_WORK_DIR = os.path.dirname(__file__)
 CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_data')
@@ -30,7 +30,7 @@ def generate_offline_recognize_result(tensor):
         index = raw_index
 
     return_info = {
-        'each_prob': '',
+        'each_prob': str(prob_each_sign),
         'max_prob': max_value,
         'index': index,
         'raw_index': raw_index,
@@ -132,7 +132,7 @@ def main():
         online_recognizer = RecognizeQueue(stop_event)
         online_recognizer.start()
     else:
-        offline_rnn_model = load_model_param(offline_rnn_model, 'model_param')
+        offline_rnn_model = load_model_param(offline_rnn_model, 'rnn_model')
 
     data_mat_cnt = 0
 
