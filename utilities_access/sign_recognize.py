@@ -1,5 +1,4 @@
 # coding:utf-8
-import Queue
 import json
 import multiprocessing
 import os
@@ -9,6 +8,7 @@ import threading
 import time
 from subprocess import Popen, PIPE
 
+import Queue
 import numpy as np
 from myo.lowlevel import VibrationType
 from sklearn.externals import joblib
@@ -102,7 +102,7 @@ class RecognizeWorker(multiprocessing.Process):
         self.pipe_output = None
 
         # todo 这里设置识别模式 在线online 离线offline
-        self.RECOGNIZE_MODE = 'online'
+        self.RECOGNIZE_MODE = 'offline'
 
 
     #  setting start recognize flag

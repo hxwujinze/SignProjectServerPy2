@@ -2,40 +2,21 @@
 import json
 import os
 import pickle
+import queue
 import threading
 import time
 
 import numpy as np
-import queue
 import torch
 import torch.nn.functional as F
-from torch.autograd import Variable
-
 from CNN_model import RawInputCNN, get_max_index
 from RNN_model import LSTM
+from torch.autograd import Variable
 from verify_model import SiameseNetwork
 
 CURR_WORK_DIR = os.path.dirname(__file__)
 CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_data')
 
-# 取最大值 并且转换为int 用于处理rnn输出
-def generate_offline_recognize_result(tensor):
-    prob_each_sign = torch.squeeze(tensor).data.numpy()
-    max_res = torch.max(tensor, dim=1)
-    max_value = max_res[0].data.float()[0]
-    raw_index = max_res[1].data.int()[0]
-    if max_value < 0.90:
-        index = 13
-    else:
-        index = raw_index
-
-    return_info = {
-        'each_prob': str(prob_each_sign),
-        'max_prob': max_value,
-        'index': index,
-        'raw_index': raw_index,
-    }
-    return return_info
 
 class RecognizeQueue(threading.Thread):
     def __init__(self, stop_flag):
@@ -85,10 +66,10 @@ class RecognizeQueue(threading.Thread):
                     'verify_result': str(verify_result)
                 }
                 # todo product , only output correct
-                # if verify_result:
-                #     print(json.dumps(return_info))
+                if verify_result:
+                    print(json.dumps(return_info))
                 # todo dev, output all
-                print(json.dumps(return_info))
+                # print(json.dumps(return_info))
 
     def verify_correctness(self, data, predict_index):
         """
@@ -99,7 +80,7 @@ class RecognizeQueue(threading.Thread):
         reference_vector = Variable(torch.from_numpy(reference_vector).double())
         diff = F.pairwise_distance(data_vector, reference_vector)
         diff = torch.squeeze(diff).data[0]
-        if diff > 1.2:
+        if diff > 0.2:
             return False, diff
         else:
             return True, diff
@@ -119,6 +100,26 @@ def load_model_param(model, model_type_name):
                 model.load_state_dict(torch.load(file_))
                 model.eval()
                 return model
+
+# 取最大值 并且转换为int 用于处理rnn输出
+def generate_offline_recognize_result(tensor):
+    prob_each_sign = torch.squeeze(tensor).data.numpy()
+    max_res = torch.max(tensor, dim=1)
+    max_value = max_res[0].data.float()[0]
+    raw_index = max_res[1].data.int()[0]
+    if max_value < 0.90:
+        index = 13
+    else:
+        index = raw_index
+
+    return_info = {
+        'each_prob': str(prob_each_sign),
+        'max_prob': max_value,
+        'index': index,
+        'raw_index': raw_index,
+    }
+    return return_info
+
 
 def main():
     # load model
