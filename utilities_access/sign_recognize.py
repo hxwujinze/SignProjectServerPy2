@@ -14,6 +14,7 @@ from myo.lowlevel import VibrationType
 from sklearn.externals import joblib
 
 from . import armbands_manager
+from . import my_pickle
 from . import process_data
 from .utilities_classes import Message
 
@@ -68,7 +69,8 @@ class RecognizeWorker(multiprocessing.Process):
 
     def __init__(self, message_q,
                  armbands_timetag,
-                 event):
+                 event,
+                 recognize_mode):
         multiprocessing.Process.__init__(self, name='RecognizeWorker')
         print('RecognizeWorker created')
         # 接受识别结果的主线程
@@ -85,6 +87,8 @@ class RecognizeWorker(multiprocessing.Process):
         # set时进行识别 unset时不识别 初始是unset
         self.recognize_status = multiprocessing.Event()
 
+        self.recognize_mode = recognize_mode
+
         # 无法pickle序列化的类对象的实例化需要在进程的run方法里完成
         # 这里先用None 进行占位
         self.online_recognizer = None
@@ -92,6 +96,8 @@ class RecognizeWorker(multiprocessing.Process):
 
         # 手环数据采集周期
         self._t_s = 0.01
+        self.start_time = None
+
         self.EMG_captured_data = np.array([0])
         self.ACC_captured_data = np.array([0])
         self.GYR_captured_data = np.array([0])
@@ -101,8 +107,18 @@ class RecognizeWorker(multiprocessing.Process):
         self.pipe_input = None
         self.pipe_output = None
 
-        # todo 这里设置识别模式 在线online 离线offline
-        self.RECOGNIZE_MODE = 'offline'
+        # 设置识别模式 在线online 离线offline(默认)
+        self.recognize_model = 'offline'
+
+    def is_timeout(self):
+        """
+        每次检查时 会作为一次开始
+        根据start time 是否为None确定识别是否开始
+        :return:
+        """
+        if self.start_time is None:
+            self.start_time = time.clock()
+        return time.clock() - self.start_time > MAX_CAPTURE_TIME
 
 
     #  setting start recognize flag
@@ -113,10 +129,16 @@ class RecognizeWorker(multiprocessing.Process):
         self.recognize_status.clear()
 
     def set_online_recognize_mode(self, online):
-        if online:
-            self.RECOGNIZE_MODE = 'online'
-        else:
-            self.RECOGNIZE_MODE = 'offline'
+        if online and self.recognize_mode.is_set():
+            self.recognize_model = 'online'
+            self.pipe_input.write(self.recognize_model + '\n')
+            self.online_recognizer.online_working_flag.set()
+        if not online and not self.recognize_mode.is_set():
+            self.recognize_model = 'offline'
+            self.pipe_input.write(self.recognize_model + '\n')
+            self.online_recognizer.online_working_flag.clear()
+
+
 
     def _stop_recognize(self, stop_type):
         self.recognize_status.clear()
@@ -150,39 +172,38 @@ class RecognizeWorker(multiprocessing.Process):
         if self.rnn_recg_proc is None:
             self.pipe_input, self.pipe_output, err_pipe, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
-
             err_printer = ErrorOutputListener(self.outer_event, err_pipe)
             err_printer.start()
-
-        if self.RECOGNIZE_MODE == 'online':
             self.online_recognizer = OnlineRecognizer(self.message_q,
                                                       self.pipe_input,
                                                       self.pipe_output)
-
-        self.pipe_input.write(self.RECOGNIZE_MODE + '\n')
+        self.pipe_input.write(self.recognize_model + '\n')
 
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
-            time.sleep(0.05)
+            time.sleep(0.1)
             if self.recognize_status.is_set():
                 print('RecognizeWorker start working')
-                start_time = time.time()
-                curr_time = start_time
 
-                while self.recognize_status.is_set():
-                    # 判断是否超时 每次手语采集具有时间限制 超时后停止手语采集
-                    if curr_time - start_time > MAX_CAPTURE_TIME:
-                        # 超时后停止识别工作
-                        print("sign capture timeout , quiting")
-                        self._stop_recognize("timeout")
-                        # 返回外层循环进行等待
-                        break
-                    curr_time = time.time()
+            if self.recognize_mode.is_set():
+                self.set_online_recognize_mode(True)
+            else:
+                self.set_online_recognize_mode(False)
 
-                    if self.RECOGNIZE_MODE == 'offline':
-                        self.offline_recognize()
-                    else:
-                        self.online_recognize()
+            while self.recognize_status.is_set():
+                # 判断是否超时 每次手语采集具有时间限制 超时后停止手语采集
+                if self.is_timeout():
+                    # 超时后停止识别工作
+                    print("sign capture timeout , quiting")
+                    self._stop_recognize("timeout")
+                    # 返回外层循环进行等待
+                    self.start_time = None
+                    break
+
+                if self.recognize_model == 'offline':
+                    self.offline_recognize()
+                else:
+                    self.online_recognize()
 
         print("recognize thread stopped\n")
         self.pipe_input.write('end\n')
@@ -218,11 +239,16 @@ class RecognizeWorker(multiprocessing.Process):
     # 在线识别 一边采集一边识别
     def online_recognize(self):
         self.get_left_armband_obj().vibrate(VibrationType.short)
-        time.sleep(0.31)
+        time.sleep(0.15)
         print("capture start at: %s" % time.clock())
         cap_start_time = time.clock()
         # 当处在进行识别状态时才采集数据
         while self.recognize_status.is_set():
+            if self.is_timeout():
+                print("sign capture timeout , quiting")
+                self._stop_recognize("timeout")
+                self.start_time = None
+                break
             current_time = time.clock()
             gap_time = current_time - cap_start_time
             if gap_time >= self._t_s:
@@ -234,8 +260,8 @@ class RecognizeWorker(multiprocessing.Process):
                     self.online_recognizer.append_data(acc_data, gyr_data, emg_data)
                 cap_start_time = time.clock()
 
-        # 结束一次采集后  将历史数据保存起来
-        self.online_recognizer.store_raw_history_data()
+        # todo debug 结束一次采集后  将历史数据保存起来
+        # self.online_recognizer.store_raw_history_data()
 
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -249,7 +275,7 @@ class RecognizeWorker(multiprocessing.Process):
     def capture_sign(self):
         self.init_data()
         self.get_left_armband_obj().vibrate(VibrationType.short)
-        time.sleep(0.31)
+        time.sleep(0.15)
         print("capture start at: %s" % time.clock())
         cap_start_time = time.clock()
         sign_start_time = time.clock()
@@ -325,9 +351,12 @@ class RecognizeWorker(multiprocessing.Process):
                                                            gyr_data=gyr_data_appended,
                                                            emg_data=emg_data_appended)
         if CURR_CLASSIFY_STATE == RNN_STATE:
-            data_file_name = generate_data_seg_file(data_mat)
+            # data_file_name = generate_data_seg_file(data_mat)
+
             # 通过pipe向之前启动的py3识别进程发送识别数据id
-            self.pipe_input.write(data_file_name + '\n')
+            data_mat_pickle_str = my_pickle.dumps(data_mat)
+            self.pipe_input.write(data_mat_pickle_str + '\n')
+
             res = self.pipe_output.readline()
             res = json.loads(res)
             print('**************************************')
@@ -361,6 +390,7 @@ class OnlineRecognizer:
         self.pipe_input = pipe_input
         self.pipe_output = pipe_output
         self.stop_flag = threading.Event()
+        self.online_working_flag = threading.Event()
 
         # 当前识别数据段的窗口指针
         self.window_start = 0
@@ -380,7 +410,8 @@ class OnlineRecognizer:
         # 将识别结果放入与工作线程通讯的消息队列 作为识别出的结果
         self.result_receiver = ResultReceiver(self.outer_msg_queue,
                                               self.pipe_output,
-                                              self.stop_flag)
+                                              self.stop_flag,
+                                              self.online_working_flag)
         self.result_receiver.start()
 
 
@@ -403,8 +434,14 @@ class OnlineRecognizer:
             new_data_seg = [each_cap_type_buffer[self.window_start:self.window_end]
                             for each_cap_type_buffer in self.data_buffer]
             self.data_processor.new_data_queue.put(new_data_seg)
-            self.window_end += 8
-            self.window_start += 8
+            step = random.randint(8, 32)
+            self.window_end += step
+            self.window_start += step
+
+    def clean_buffer(self):
+        self.window_end = 128
+        self.window_start = 0
+        self.data_buffer = ([], [], [])
 
     def store_raw_history_data(self):
         # 将buffer内的数据作为原始的历史采集数据进行保存
@@ -418,9 +455,10 @@ class OnlineRecognizer:
         file_ = open(CURR_DATA_DIR + '\\raw_data_history_' + time_tag, 'w+b')
         pickle.dump(data_history, file_)
         file_.close()
-        self.data_buffer = ([], [], [])
+        self.clean_buffer()
 
     def stop_recognize(self):
+        self.online_working_flag.set()
         self.stop_flag.set()
 
 class DataProcessor(threading.Thread):
@@ -434,9 +472,6 @@ class DataProcessor(threading.Thread):
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
 
-        self.processed_data_history = []
-        self.processed_data_tags = []
-
     def run(self):
         data_mat_cnt = 0
         while not self.stop_flag.isSet():
@@ -446,8 +481,8 @@ class DataProcessor(threading.Thread):
                 data_mat = self.create_data_seg(acc_data=new_seg_data[0],
                                                 gyr_data=new_seg_data[1],
                                                 emg_data=new_seg_data[2])
-                data_file_name = generate_data_seg_file(data_mat)
-                self.input_pipe.write(data_file_name + '\n')
+                data_pickle_str = my_pickle.dumps(data_mat)
+                self.input_pipe.write(data_pickle_str + '\n')
 
                 data_mat_cnt += 1
         self.input_pipe.write('end\n')
@@ -470,46 +505,49 @@ class DataProcessor(threading.Thread):
 
 
 class ResultReceiver(threading.Thread):
-    def __init__(self, message_q, output_pipe, stop_flag):
+    def __init__(self, message_q, output_pipe, stop_flag, sleep_flag):
         threading.Thread.__init__(self)
         self.message_q = message_q
         self.output_pipe = output_pipe
         self.stop_flag = stop_flag
+        self.sleep_flag = sleep_flag
 
     def run(self):
         while not self.stop_flag.is_set():
-            res = self.output_pipe.readline()
-            if res == '':
-                continue
-            res = json.loads(res)
+            time.sleep(0.1)
+            while self.sleep_flag.is_set:
+                res = self.output_pipe.readline()
+                if res == '':
+                    continue
+                res = json.loads(res)
 
-            # 是空手语时直接跳过
-            if res['index'] == 13:
-                continue
-            print('**************************************')
-            print("online mode ")
-            print('recognize result:')
-            print('diff: %s' % res['diff'])
-            print('index: %d' % res['index'])
-            print('verify_result: %s' % res['verify_result'])
-            print('**************************************')
-            sign_index = res['index']
-            if res['verify_result'] == 'True':
-                raw_capture_data = {
-                    'acc': [],
-                    'emg': [],
-                    'gyr': [],
-                }
-                data = {
-                    'res_text': GESTURES_TABLE[sign_index],
-                    'middle_symbol': sign_index,
-                    'raw_data': raw_capture_data
-                }
-                # 向主线程返回识别的结果
-                msg = Message(control='append_recognize_result',
-                              data=data)
-                if not self.stop_flag.is_set():
-                    self.message_q.put(msg)
+                # 是空手语时直接跳过
+                # if res['index'] == 13:
+                #     continue
+                print('**************************************')
+                print("online mode ")
+                print('recognize result:')
+                print('diff: %s' % res['diff'])
+                print('index: %d' % res['index'])
+                print('verify_result: %s' % res['verify_result'])
+                print('**************************************')
+                sign_index = res['index']
+                if res['verify_result'] == 'True':
+                    raw_capture_data = {
+                        'acc': [],
+                        'emg': [],
+                        'gyr': [],
+                    }
+                    data = {
+                        'res_text': GESTURES_TABLE[sign_index],
+                        'middle_symbol': sign_index,
+                        'raw_data': raw_capture_data
+                    }
+                    # 向主线程返回识别的结果
+                    msg = Message(control='append_recognize_result',
+                                  data=data)
+                    if not self.stop_flag.is_set():
+                        self.message_q.put(msg)
 
 class ErrorOutputListener(threading.Thread):
     def __init__(self, stop_flag, pipe):

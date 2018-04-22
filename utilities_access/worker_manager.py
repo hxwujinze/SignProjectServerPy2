@@ -7,6 +7,7 @@ import time
 from multiprocessing import Queue
 
 from . import armbands_manager
+from . import models as dj_models
 from .sign_recognize import RecognizeWorker
 from .utilities_classes import Message
 
@@ -71,6 +72,8 @@ class MainWorkerThread(threading.Thread):
         # 手语识别线程对象
         self.recognize_event = multiprocessing.Event()
         # 用于通知手语识别线程何时退出的event对象
+        self.recognize_mode = multiprocessing.Event()
+        # 设置手语识别模式 True is online False is offline
 
     """
     该方法用于获取一个可用的监听接口用于socket连接
@@ -130,7 +133,8 @@ class MainWorkerThread(threading.Thread):
 
         self.recognize_process = RecognizeWorker(self.message_q,
                                                  armbands_tags,
-                                                 self.recognize_event)
+                                                 self.recognize_event,
+                                                 self.recognize_mode)
         self.recognize_process.start()
         # 进入工作线程的主循环 扫描消息队列
         self.standby_loop()
@@ -222,7 +226,7 @@ class MainWorkerThread(threading.Thread):
         # only one recognize task can be ran by work at the same time
         if self.curr_process_request_id != -1:
             return
-        from . import models as dj_models
+
         print("sign_recognize start,\n recognize info : %s" % str(info))
         if info['sign_id'] == 0:
             curr_sign_id = dj_models.acquire_latest_sign_id()
@@ -259,6 +263,7 @@ class MainWorkerThread(threading.Thread):
 
     def stop_recognize(self, data):
         data = {
+            # end_recognize 的消息是由dispatcher接受的 接收后退出工作loop
             'control': 'end_recognize',
             'sign_id': self.curr_recognize_res.sign_request_id,
             'type': 'by client' if data.get("type") is None else data['type']
@@ -273,6 +278,16 @@ class MainWorkerThread(threading.Thread):
             self.message_q.get()
         self.put_message_into_queue(msg)
 
+    def switch_recognize_model(self, data):
+        """
+        切换识别模式 在线 or 离线
+        :param data: data 的 mode 字段存有 online 或offline
+        """
+        if data['mode'] == 'online':
+            self.recognize_mode.set()
+        else:
+            self.recognize_mode.clear()
+
     task_maping = {
         'send_msg': send_message,
         # 发送消息
@@ -282,6 +297,7 @@ class MainWorkerThread(threading.Thread):
         # 追加手语识别结果
         'stop_recognize': stop_recognize,
         # 停止手语识别
+        'switch_recognize_mode': switch_recognize_model,
     }
 
     @staticmethod
