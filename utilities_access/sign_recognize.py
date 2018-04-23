@@ -1,4 +1,5 @@
 # coding:utf-8
+import Queue
 import json
 import multiprocessing
 import os
@@ -8,10 +9,8 @@ import threading
 import time
 from subprocess import Popen, PIPE
 
-import Queue
 import numpy as np
 from myo.lowlevel import VibrationType
-from sklearn.externals import joblib
 
 from . import armbands_manager
 from . import my_pickle
@@ -44,7 +43,7 @@ PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Pyt
 SCALE_DATA = np.loadtxt(CURR_DATA_DIR + "\\scale.txt")
 
 # 这里将模型装载进来
-CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
+# CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
 
 TYPE_LEN = {
     'acc': 3,
@@ -87,7 +86,10 @@ class RecognizeWorker(multiprocessing.Process):
         # set时进行识别 unset时不识别 初始是unset
         self.recognize_status = multiprocessing.Event()
 
-        self.recognize_mode = recognize_mode
+        # 设置识别模式 在线online 离线offline(默认)
+        self.online_mode_enable = recognize_mode
+        self.recognize_model = 'offline'
+        self.online_mode_enable.clear()  # offline - false online true
 
         # 无法pickle序列化的类对象的实例化需要在进程的run方法里完成
         # 这里先用None 进行占位
@@ -104,11 +106,10 @@ class RecognizeWorker(multiprocessing.Process):
         self.each_capture_gap = []
 
         # 与识别进程通信使用的管道
-        self.pipe_input = None
-        self.pipe_output = None
+        self.input_pipe = None
+        self.output_pipe = None
 
-        # 设置识别模式 在线online 离线offline(默认)
-        self.recognize_model = 'offline'
+
 
     def is_timeout(self):
         """
@@ -128,15 +129,25 @@ class RecognizeWorker(multiprocessing.Process):
     def stop_recognize(self):
         self.recognize_status.clear()
 
-    def set_online_recognize_mode(self, online):
-        if online and self.recognize_mode.is_set():
+    def update_recognize_mode_status(self):
+        """
+        由于外部进程无法直接访问当前进程的内存
+        所以直接修改进程内的变量不是不想的 需要Event进行修改
+        这个函数用于不断扫描外部的信号量 当侦测到改变时及时修改内部状态
+        """
+        if self.recognize_model != 'online' and self.online_mode_enable.is_set():
             self.recognize_model = 'online'
-            self.pipe_input.write(self.recognize_model + '\n')
+            self.input_pipe.write(self.recognize_model + '\n')
+            self.input_pipe.flush()
             self.online_recognizer.online_working_flag.set()
-        if not online and not self.recognize_mode.is_set():
+            return
+
+        if self.recognize_model != 'offline' and not self.online_mode_enable.is_set():
             self.recognize_model = 'offline'
-            self.pipe_input.write(self.recognize_model + '\n')
+            self.input_pipe.write(self.recognize_model + '\n')
+            self.input_pipe.flush()
             self.online_recognizer.online_working_flag.clear()
+            return
 
 
 
@@ -154,7 +165,6 @@ class RecognizeWorker(multiprocessing.Process):
     def put_message_into_queue(self, message):
         global queue_lock
         queue_lock.acquire(True)
-        # print("put msg in queue : %s " % message)
         self.message_q.put(message)
         queue_lock.release()
 
@@ -170,25 +180,24 @@ class RecognizeWorker(multiprocessing.Process):
         for each in armbands_timetag:
             self.paired_armbands.append(armbands_manager.connect_time_obj_map[each])
         if self.rnn_recg_proc is None:
-            self.pipe_input, self.pipe_output, err_pipe, self.rnn_recg_proc = \
+            self.input_pipe, self.output_pipe, err_pipe, self.rnn_recg_proc = \
                 generate_recognize_subprocces()
+            # 错误子进程监听线程 当出现错误时 print到主进程上
             err_printer = ErrorOutputListener(self.outer_event, err_pipe)
             err_printer.start()
             self.online_recognizer = OnlineRecognizer(self.message_q,
-                                                      self.pipe_input,
-                                                      self.pipe_output)
-        self.pipe_input.write(self.recognize_model + '\n')
+                                                      self.input_pipe,
+                                                      self.output_pipe)
+        self.input_pipe.write(self.recognize_model + '\n')
+        self.input_pipe.flush()
 
         while not self.outer_event.is_set():
             # 外层循环  判断是否启动识别
             time.sleep(0.1)
             if self.recognize_status.is_set():
                 print('RecognizeWorker start working')
-
-            if self.recognize_mode.is_set():
-                self.set_online_recognize_mode(True)
-            else:
-                self.set_online_recognize_mode(False)
+                # 启动识别时 检查识别模式是否发生改变 并更新内部的状态量
+                self.update_recognize_mode_status()
 
             while self.recognize_status.is_set():
                 # 判断是否超时 每次手语采集具有时间限制 超时后停止手语采集
@@ -200,25 +209,22 @@ class RecognizeWorker(multiprocessing.Process):
                     self.start_time = None
                     break
 
-                if self.recognize_model == 'offline':
+                if not self.online_mode_enable.is_set():
                     self.offline_recognize()
                 else:
                     self.online_recognize()
 
         print("recognize thread stopped\n")
-        self.pipe_input.write('end\n')
+        self.input_pipe.write('end\n')
         self.rnn_recg_proc.terminate()
 
     # 离线识别 先采集足够的数据 在进行识别
     def offline_recognize(self):
-
         # 开始采集手语
         self.capture_sign()
         # 采集完成后根据采集的数据进行识别 采集方法返回手语结果的序号
         if self.recognize_status.is_set():
-            print("sign captured , starting recognizing ")
             sign_index = self.recognize_sign()
-            print("recognizing complete\n")
             # 保存识别时采集的手环数据
             raw_capture_data = {
                 'acc': self.ACC_captured_data,
@@ -234,13 +240,14 @@ class RecognizeWorker(multiprocessing.Process):
             msg = Message(control='append_recognize_result',
                           data=data)
             self.put_message_into_queue(msg)
-            time.sleep(0.8)
+            time.sleep(0.8)  # 每次在线采集结束后间隔时间
+
 
     # 在线识别 一边采集一边识别
     def online_recognize(self):
         self.get_left_armband_obj().vibrate(VibrationType.short)
         time.sleep(0.15)
-        print("capture start at: %s" % time.clock())
+        print("online recognize start at: %s" % time.clock())
         cap_start_time = time.clock()
         # 当处在进行识别状态时才采集数据
         while self.recognize_status.is_set():
@@ -262,7 +269,7 @@ class RecognizeWorker(multiprocessing.Process):
 
         # todo debug 结束一次采集后  将历史数据保存起来
         # self.online_recognizer.store_raw_history_data()
-
+        print("online recognize end at: %s" % time.clock())
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
         time.sleep(0.1)
@@ -276,7 +283,7 @@ class RecognizeWorker(multiprocessing.Process):
         self.init_data()
         self.get_left_armband_obj().vibrate(VibrationType.short)
         time.sleep(0.15)
-        print("capture start at: %s" % time.clock())
+        print("offline recognize capture start at: %s" % time.clock())
         cap_start_time = time.clock()
         sign_start_time = time.clock()
         # 当处在进行识别状态时才采集数据
@@ -290,7 +297,7 @@ class RecognizeWorker(multiprocessing.Process):
                     self.get_left_armband_obj().vibrate(VibrationType.short)
                     time.sleep(0.1)
                     self.get_left_armband_obj().vibrate(VibrationType.short)
-                    print("capture ended at : %s" % time.clock())
+                    print("offline recognize capture ended at : %s" % time.clock())
                     break
             gap_time = current_time - cap_start_time
             if gap_time >= self._t_s:
@@ -351,16 +358,16 @@ class RecognizeWorker(multiprocessing.Process):
                                                            gyr_data=gyr_data_appended,
                                                            emg_data=emg_data_appended)
         if CURR_CLASSIFY_STATE == RNN_STATE:
-            # data_file_name = generate_data_seg_file(data_mat)
 
             # 通过pipe向之前启动的py3识别进程发送识别数据id
             data_mat_pickle_str = my_pickle.dumps(data_mat)
-            self.pipe_input.write(data_mat_pickle_str + '\n')
+            self.input_pipe.write(data_mat_pickle_str + '\n')
+            self.input_pipe.flush()
 
-            res = self.pipe_output.readline()
+            res = self.output_pipe.readline()
             res = json.loads(res)
             print('**************************************')
-            print('recognize result:')
+            print('offline recognize result:')
             each_prob = 'each prob: \n' + res['each_prob']
             print(each_prob)
             print('max_prob: %s' % res['max_prob'])
@@ -370,10 +377,10 @@ class RecognizeWorker(multiprocessing.Process):
 
             return res['index']
 
-        elif CURR_CLASSIFY_STATE == SVM_STATE:
+        # elif CURR_CLASSIFY_STATE == SVM_STATE:
             # 直接把每个windows的数据展开成一个长的向量 44 * 10
-            res = int(CLF.predict(data_mat.ravel()))
-            return res
+        # res = int(CLF.predict(data_mat.ravel()))
+        # return res
 
 
     def get_left_armband_obj(self):
@@ -389,8 +396,11 @@ class OnlineRecognizer:
         self.outer_msg_queue = message_q
         self.pipe_input = pipe_input
         self.pipe_output = pipe_output
+        # 停止工作标记 set之后退出线程
         self.stop_flag = threading.Event()
+        # 在线识别工作启用标记 被set之后 在线识别被启用
         self.online_working_flag = threading.Event()
+        self.online_working_flag.clear()
 
         # 当前识别数据段的窗口指针
         self.window_start = 0
@@ -434,7 +444,7 @@ class OnlineRecognizer:
             new_data_seg = [each_cap_type_buffer[self.window_start:self.window_end]
                             for each_cap_type_buffer in self.data_buffer]
             self.data_processor.new_data_queue.put(new_data_seg)
-            step = random.randint(8, 32)
+            step = random.randint(8, 32)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
             self.window_end += step
             self.window_start += step
 
@@ -459,7 +469,7 @@ class OnlineRecognizer:
 
     def stop_recognize(self):
         self.online_working_flag.set()
-        self.stop_flag.set()
+        self.stop_flag.clear()
 
 class DataProcessor(threading.Thread):
     def __init__(self, input_pipe, output_pipe, stop_flag):
@@ -468,12 +478,10 @@ class DataProcessor(threading.Thread):
         self.data_list = []
         self.new_data_queue = Queue.Queue()
         self.stop_flag = stop_flag
-
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
 
     def run(self):
-        data_mat_cnt = 0
         while not self.stop_flag.isSet():
             time.sleep(0.08)
             while not self.new_data_queue.empty():
@@ -483,9 +491,10 @@ class DataProcessor(threading.Thread):
                                                 emg_data=new_seg_data[2])
                 data_pickle_str = my_pickle.dumps(data_mat)
                 self.input_pipe.write(data_pickle_str + '\n')
+                self.input_pipe.flush()  # 用flush保证字节流及时被传入识别线程
 
-                data_mat_cnt += 1
         self.input_pipe.write('end\n')
+        self.input_pipe.flush()
 
     @staticmethod
     def create_data_seg(acc_data, gyr_data, emg_data):
@@ -502,31 +511,33 @@ class DataProcessor(threading.Thread):
                                                            emg_data=emg_data)
         return data_mat
 
-
-
+# 在线识别启动时 启用识别结果接受线程
 class ResultReceiver(threading.Thread):
-    def __init__(self, message_q, output_pipe, stop_flag, sleep_flag):
+    def __init__(self, message_q, output_pipe, stop_flag, online_enable_flag):
         threading.Thread.__init__(self)
         self.message_q = message_q
+        # 向主线程返回消息的消息队列
         self.output_pipe = output_pipe
+        # 来自识别算法线程的输出pipe
         self.stop_flag = stop_flag
-        self.sleep_flag = sleep_flag
+        # 线程退出时的终止标记
+        self.online_enable_flag = online_enable_flag
+        #  设置在线识别线程的启用以及终止
+
 
     def run(self):
         while not self.stop_flag.is_set():
-            time.sleep(0.1)
-            while self.sleep_flag.is_set:
+            time.sleep(0.08)
+            while self.online_enable_flag.is_set():
                 res = self.output_pipe.readline()
-                if res == '':
-                    continue
-                res = json.loads(res)
+                try:
+                    res = json.loads(res)
+                except ValueError:
+                    # 取出上次加入阻塞在pipe里的内容
+                    break
 
-                # 是空手语时直接跳过
-                # if res['index'] == 13:
-                #     continue
                 print('**************************************')
-                print("online mode ")
-                print('recognize result:')
+                print('online recognize result:')
                 print('diff: %s' % res['diff'])
                 print('index: %d' % res['index'])
                 print('verify_result: %s' % res['verify_result'])
@@ -591,16 +602,6 @@ def generate_recognize_subprocces():
     pipe_err = rnn_sub_process.stderr
     print('pid %d' % rnn_sub_process.pid)
     return pipe_input, pipe_output, pipe_err, rnn_sub_process
-
-def generate_data_seg_file(data_mat):
-    data_id = random.randint(0, 9999999)
-    data_file_name = str(data_id) + '.data'
-    data_path = CURR_WORK_DIR + '\\' + data_file_name
-    file_ = open(data_path, 'w+b')
-    pickle.dump(data_mat, file_)
-    file_.close()
-    return data_file_name
-
 
 # #################### rnn  sector ##############
 #     import from process_data package

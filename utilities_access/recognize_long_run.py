@@ -2,17 +2,18 @@
 import json
 import os
 import pickle
-import queue
 import threading
 import time
 
-import my_pickle
 import numpy as np
+import queue
 import torch
 import torch.nn.functional as F
+from torch.autograd import Variable
+
+import my_pickle
 from CNN_model import CNN, get_max_index
 from RNN_model import LSTM
-from torch.autograd import Variable
 from verify_model import SiameseNetwork
 
 CURR_WORK_DIR = os.path.dirname(__file__)
@@ -57,6 +58,7 @@ class RecognizeQueue(threading.Thread):
                 classify_output = self.cnn_model(data_mat)
                 predict_index = get_max_index(classify_output)[0]
                 verify_result, diff = self.verify_correctness(data_mat, predict_index)
+
                 if verify_result:
                     if predict_index == 13:
                         continue
@@ -71,8 +73,8 @@ class RecognizeQueue(threading.Thread):
                 else:
                     self.is_redundant = False
 
-                return_info['data'] = new_msg
-                self.recognize_data_history.append(return_info)
+                # return_info['data'] = new_msg
+                # self.recognize_data_history.append(return_info)
 
 
 
@@ -85,7 +87,7 @@ class RecognizeQueue(threading.Thread):
         reference_vector = Variable(torch.from_numpy(reference_vector).double())
         diff = F.pairwise_distance(data_vector, reference_vector)
         diff = torch.squeeze(diff).data[0]
-        if diff > 0.2:
+        if diff > 0.12:
             return False, diff
         else:
             return True, diff
@@ -98,13 +100,14 @@ class RecognizeQueue(threading.Thread):
 
 
     def stop_thread(self):
+        # 保存历史数据
         time_tag = time.strftime("%H_%M_%S", time.localtime(time.time()))
         file_name = os.path.join(CURR_DATA_DIR, 'history_recognized_data_' + time_tag)
         file_ = open(file_name, 'wb')
         pickle.dump(self.recognize_data_history, file_)
         file_.close()
-        self.recognize_data_history = []
 
+        self.recognize_data_history = []
         self.stop_flag.set()
 
 def load_model_param(model, model_type_name):
@@ -159,8 +162,9 @@ def main():
             break
         if read_.endswith('line'):
             mode = read_
-            if mode != 'online':
+            if mode == 'offline':
                 online_recognizer.clean_data_queue()
+                print('clean stab')  # 用于清空上次在线识别阻塞住的readline
             continue
 
         data_mat = my_pickle.loads(read_)

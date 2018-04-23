@@ -26,7 +26,6 @@ def get_armbands_list(request):
             "armband_id": each.armband_id,
             "armband_status": -2 if each.is_occupied() else -1
         })
-
     return HttpResponse(json.dumps(armbands_jsonlist, indent=3))
 
 """

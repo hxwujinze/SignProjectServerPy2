@@ -1,7 +1,16 @@
 # coding:utf-8
 import numpy as np
 
+"""
+将np array <-> string  便于在pipe中传递 而不用生成硬盘的文件 提高运行速度
+"""
+
 def loads(string):
+    """
+    将string 重新转换为np.array
+    :param string:
+    :return:
+    """
     rows = string.split(';')
     data_mat = []
     for each_row in rows:
@@ -13,7 +22,6 @@ def loads(string):
                 continue
             row_data.append(float(each_col))
         data_mat.append(row_data)
-
     return np.array(data_mat)
 
 def dumps(array):
@@ -23,22 +31,17 @@ def dumps(array):
     :return:  string
     """
     res = ''
-    try:
-        dim1_len = len(array)
-        dim2_len = len(array[0, :])
-    except IndexError:
-        print('not 2d array')
-        return ''
-    for row in range(dim1_len):
-        for col in range(dim2_len):
-            res += str(array[row][col])
-            res += ','
-        res += ';'
+    for row in array:
+        for col in row:
+            res += str(col) + ','
+        res = '%s;' % res
+
     return res
 
 if __name__ == '__main__':
-    a = np.array([np.arange(0, 200, 1) for each in range(50)])
+    a = np.array([np.arange(0, 14, 1) for each in range(64)])
     s = dumps(a)
-    print(s)
+    # print(s)
     aa = loads(s)
-    print(aa)
+    # print(aa)
+    s = dumps(a)
