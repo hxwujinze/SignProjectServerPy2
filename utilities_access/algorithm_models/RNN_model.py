@@ -1,4 +1,4 @@
-# coding:utf-8
+
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -40,9 +40,9 @@ class LSTM(nn.Module):
 
     def forward(self, x):
         lstm_out, (h_n, h_c) = self.lstm(x, None)
-        out = F.relu(lstm_out)
+        out = F.leaky_relu(lstm_out)
         out = self.out(out[:, -1, :])
-        out = F.relu(out)
+        out = F.leaky_relu(out)
         out2 = self.out2(out)
         out2 = F.softmax(out2)
         return out2

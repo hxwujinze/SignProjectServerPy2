@@ -129,7 +129,6 @@ def feature_extract_single_polyfit(data, compress):
     return seg_poly_fit
 
 def feature_extract_single(polyfit_data, type_name):
-    # todo 先进行曲线拟合处理
     # 对曲线拟合后的数据进行特征提取 效果更好
     polyfit_data = feature_extract_single_polyfit(polyfit_data, 1)
     window_amount = len(polyfit_data) / WINDOW_SIZE

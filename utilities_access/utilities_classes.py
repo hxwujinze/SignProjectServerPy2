@@ -1,6 +1,5 @@
 # coding:utf-8
 import json
-import os
 
 """
 message 示例
@@ -35,4 +34,3 @@ class Message:
         }
         return json.dumps(obj, indent=2)
 
-CURR_WORK_DIR = os.path.dirname(__file__) + '\\models_data'

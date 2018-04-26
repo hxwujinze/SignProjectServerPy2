@@ -1,5 +1,4 @@
 # coding:utf-8
-import Queue
 import json
 import multiprocessing
 import os
@@ -9,6 +8,7 @@ import threading
 import time
 from subprocess import Popen, PIPE
 
+import Queue
 import numpy as np
 from myo.lowlevel import VibrationType
 
@@ -28,29 +28,21 @@ MAX_CAPTURE_TIME = 60
 RNN_STATE = 566
 SVM_STATE = 852
 
-
-
 # todo 在这里进行更改识别算法
 CURR_CLASSIFY_STATE = RNN_STATE
 
 CURR_WORK_DIR = os.path.join(os.getcwd(), 'utilities_access')
-CURR_DATA_DIR = CURR_WORK_DIR + '\\models_data'
+CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_param')
 
 # todo 这里键入python3路径 for pytroch运行
 PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
 # PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
 
-SCALE_DATA = np.loadtxt(CURR_DATA_DIR + "\\scale.txt")
 
 # 这里将模型装载进来
 # CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
 
-TYPE_LEN = {
-    'acc': 3,
-    'gyr': 3,
-    'emg': 8
-}
-CAP_TYPE_LIST = ['acc', 'emg', 'gyr']
+
 
 GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',  # 0-9
                   '老师 ', '发烧 ', '谢谢 ', '', '大家 ', '支持 ', '我们 ', '创新 ', '医生 ', '交流 ',  # 10 - 19
@@ -268,7 +260,7 @@ class RecognizeWorker(multiprocessing.Process):
                 cap_start_time = time.clock()
 
         # todo debug 结束一次采集后  将历史数据保存起来
-        # self.online_recognizer.store_raw_history_data()
+        self.online_recognizer.store_raw_history_data()
         print("online recognize end at: %s" % time.clock())
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -357,11 +349,23 @@ class RecognizeWorker(multiprocessing.Process):
         data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
                                                            gyr_data=gyr_data_appended,
                                                            emg_data=emg_data_appended)
+        acc_verify_data = \
+            process_data.feature_extract_single_polyfit(self.ACC_captured_data[16:144, :], 2)
+        gyr_verify_data = \
+            process_data.feature_extract_single_polyfit(self.GYR_captured_data[16:144, :], 2)
+        emg_verify_data = process_data.wavelet_trans(self.EMG_captured_data[16:144, :])
+        emg_verify_data = process_data.expand_emg_data_single(emg_verify_data)
+
+        verify_data_mat = process_data.append_single_data_feature(acc_data=acc_verify_data,
+                                                                  gyr_data=gyr_verify_data,
+                                                                  emg_data=emg_verify_data)
+
         if CURR_CLASSIFY_STATE == RNN_STATE:
 
             # 通过pipe向之前启动的py3识别进程发送识别数据id
             data_mat_pickle_str = my_pickle.dumps(data_mat)
-            self.input_pipe.write(data_mat_pickle_str + '\n')
+            verify_data_mat = my_pickle.dumps(verify_data_mat)
+            self.input_pipe.write(data_mat_pickle_str + '|' + verify_data_mat + '\n')
             self.input_pipe.flush()
 
             res = self.output_pipe.readline()
@@ -373,6 +377,8 @@ class RecognizeWorker(multiprocessing.Process):
             print('max_prob: %s' % res['max_prob'])
             print('index: %d' % res['index'])
             print('raw_index: %d' % res['raw_index'])
+            # print('verify_result: %s' % res['verify_result'])
+            # print('diff: %s' % res['diff'])
             print('**************************************')
 
             return res['index']
@@ -462,7 +468,7 @@ class OnlineRecognizer:
             'emg': self.data_buffer[2]
         }
         time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
-        file_ = open(CURR_DATA_DIR + '\\raw_data_history_' + time_tag, 'w+b')
+        file_ = open(os.path.join(CURR_DATA_DIR, 'raw_data_history_' + time_tag), 'w+b')
         pickle.dump(data_history, file_)
         file_.close()
         self.clean_buffer()
