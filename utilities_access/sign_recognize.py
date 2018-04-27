@@ -1,4 +1,5 @@
 # coding:utf-8
+import Queue
 import json
 import multiprocessing
 import os
@@ -8,7 +9,6 @@ import threading
 import time
 from subprocess import Popen, PIPE
 
-import Queue
 import numpy as np
 from myo.lowlevel import VibrationType
 
@@ -23,7 +23,7 @@ GESTURE_SIZE = 160
 CAPTURE_SIZE = 160
 
 WINDOW_SIZE = 16
-MAX_CAPTURE_TIME = 60
+MAX_CAPTURE_TIME = 90
 
 RNN_STATE = 566
 SVM_STATE = 852
@@ -260,7 +260,7 @@ class RecognizeWorker(multiprocessing.Process):
                 cap_start_time = time.clock()
 
         # todo debug 结束一次采集后  将历史数据保存起来
-        self.online_recognizer.store_raw_history_data()
+        # self.online_recognizer.store_raw_history_data()
         print("online recognize end at: %s" % time.clock())
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -408,9 +408,9 @@ class OnlineRecognizer:
         self.online_working_flag = threading.Event()
         self.online_working_flag.clear()
 
-        # 当前识别数据段的窗口指针
-        self.window_start = 0
-        self.window_end = 128
+        # 当前步进数据段的窗口指针
+        self.step_win_start = 0
+        self.step_win_end = random.randint(12, 30)
 
         # 数据缓冲区 用于接受采集的数据
         # 分别对应 acc gyr emg
@@ -445,33 +445,16 @@ class OnlineRecognizer:
             # 将三种数据追加到各自数据种类的buffer中
             self.data_buffer[each_cap_type].append(new_data[each_cap_type])
 
-        # 当window所选的数据缓冲区都有数据了 将窗口内数据传给数据处理对象
-        if len(self.data_buffer[0]) >= self.window_end:
-            new_data_seg = [each_cap_type_buffer[self.window_start:self.window_end]
-                            for each_cap_type_buffer in self.data_buffer]
+        # 当步进数据缓冲区都有数据了 将数据传给数据处理对象
+        if len(self.data_buffer[0]) >= self.step_win_end:
+            new_data_seg = [each_cap_type_buffer for each_cap_type_buffer in self.data_buffer]
             self.data_processor.new_data_queue.put(new_data_seg)
-            step = random.randint(8, 32)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
-            self.window_end += step
-            self.window_start += step
+            self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
-        self.window_end = 128
-        self.window_start = 0
+        self.step_win_end = random.randint(12, 30)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
+        self.step_win_start = 0
         self.data_buffer = ([], [], [])
-
-    def store_raw_history_data(self):
-        # 将buffer内的数据作为原始的历史采集数据进行保存
-        # 便于之后的分析
-        data_history = {
-            'acc': self.data_buffer[0],
-            'gyr': self.data_buffer[1],
-            'emg': self.data_buffer[2]
-        }
-        time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
-        file_ = open(os.path.join(CURR_DATA_DIR, 'raw_data_history_' + time_tag), 'w+b')
-        pickle.dump(data_history, file_)
-        file_.close()
-        self.clean_buffer()
 
     def stop_recognize(self):
         self.online_working_flag.set()
@@ -481,26 +464,78 @@ class DataProcessor(threading.Thread):
     def __init__(self, input_pipe, output_pipe, stop_flag):
         threading.Thread.__init__(self,
                                   name='data_processor', )
-        self.data_list = []
+        self.normalized_data_buffer = {
+            'acc': None,
+            'gyr': None,
+            #    不需要normalize emg数据 直接使用raw 即可
+        }
+
+        self.raw_data_buffer = {
+            'acc': None,
+            'gyr': None,
+            'emg': None,
+        }
+
         self.new_data_queue = Queue.Queue()
         self.stop_flag = stop_flag
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
 
+        self.start_ptr = 0
+        self.end_ptr = 0
+        self.norm_ptr_start = 0
+        self.norm_ptr_end = 288  # (288 - 128 )  = 160  相差10个窗口
+        self.extract_ptr_start = 0
+        self.extract_ptr_end = 128
+
     def run(self):
         while not self.stop_flag.isSet():
             time.sleep(0.08)
             while not self.new_data_queue.empty():
-                new_seg_data = self.new_data_queue.get()
-                data_mat = self.create_data_seg(acc_data=new_seg_data[0],
-                                                gyr_data=new_seg_data[1],
-                                                emg_data=new_seg_data[2])
-                data_pickle_str = my_pickle.dumps(data_mat)
-                self.input_pipe.write(data_pickle_str + '\n')
-                self.input_pipe.flush()  # 用flush保证字节流及时被传入识别线程
+                self.append_raw_data()
+                if self.end_ptr >= self.norm_ptr_end:
+                    self.normalize_data()
+                if self.norm_ptr_end >= self.extract_ptr_end:
+                    self.feat_extract_and_send()
 
         self.input_pipe.write('end\n')
         self.input_pipe.flush()
+
+    def append_raw_data(self):
+        new_seg_data = self.new_data_queue.get()
+        type_list = ['acc', 'gyr', 'emg']
+        for each_type in range(len(type_list)):
+            if self.raw_data_buffer[type_list[each_type]] is None:
+                self.raw_data_buffer[type_list[each_type]] = new_seg_data[each_type]
+            else:
+                self.raw_data_buffer[type_list[each_type]] = \
+                    np.vstack((self.raw_data_buffer[type_list[each_type]], new_seg_data[each_type]))
+        self.end_ptr += len(new_seg_data[0])  # 更新buffer长度
+
+    def normalize_data(self):
+        type_list = ['acc', 'gyr']
+        for each_type in type_list:
+            # todo 这里选择是否归一化
+            tmp = process_data.normalize(self.raw_data_buffer[each_type][self.norm_ptr_start:self.norm_ptr_end, :])
+            # tmp = raw_data[each_type][normalized_ptr_start:normalized_ptr_end, :]
+            if self.normalized_data_buffer[each_type] is None:
+                self.normalized_data_buffer[each_type] = tmp
+            else:
+                # todo 可能需要调整
+                self.normalized_data_buffer[each_type] = np.vstack(
+                    (self.normalized_data_buffer[each_type], tmp[-128:, :]))
+        self.norm_ptr_start += 128
+        self.norm_ptr_end += 128
+
+    def feat_extract_and_send(self):
+        acc_data = self.normalized_data_buffer['acc'][self.extract_ptr_start:self.extract_ptr_end, :]
+        gyr_data = self.normalized_data_buffer['gyr'][self.extract_ptr_start:self.extract_ptr_end, :]
+        emg_data = self.raw_data_buffer['emg'][self.extract_ptr_start:self.extract_ptr_end, :]
+        data_mat = self.create_data_seg(acc_data, gyr_data, emg_data)
+        self.send_to_recognize_process(data_mat)
+        self.extract_ptr_end += 16
+        self.extract_ptr_start += 16
+        pass
 
     @staticmethod
     def create_data_seg(acc_data, gyr_data, emg_data):
@@ -516,6 +551,36 @@ class DataProcessor(threading.Thread):
                                                            gyr_data=gyr_data,
                                                            emg_data=emg_data)
         return data_mat
+
+    def send_to_recognize_process(self, data_mat):
+        data_pickle_str = my_pickle.dumps(data_mat)
+        self.input_pipe.write(data_pickle_str + '\n')
+        self.input_pipe.flush()  # 用flush保证字节流及时被传入识别线程
+
+    def store_raw_history_data(self):
+        # 将buffer内的数据作为原始的历史采集数据进行保存
+        # 便于之后的分析
+        data_history = self.raw_data_buffer
+        time_tag = time.strftime("%H-%M-%S", time.localtime(time.time()))
+        file_ = open(os.path.join(CURR_DATA_DIR, 'raw_data_history_' + time_tag), 'w+b')
+        pickle.dump(data_history, file_)
+        file_.close()
+        self.clean_buffer()
+
+    def clean_buffer(self):
+        self.normalized_data_buffer = {
+            'acc': None,
+            'gyr': None,
+            #    不需要normalize emg数据 直接使用raw 即可
+        }
+
+        self.raw_data_buffer = {
+            'acc': None,
+            'gyr': None,
+            'emg': None,
+        }
+
+
 
 # 在线识别启动时 启用识别结果接受线程
 class ResultReceiver(threading.Thread):

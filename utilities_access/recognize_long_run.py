@@ -2,18 +2,19 @@
 import json
 import os
 import pickle
-import queue
 import threading
 import time
 
-import my_pickle
 import numpy as np
+import queue
 import torch
 import torch.nn.functional as F
+from torch.autograd import Variable
+
+import my_pickle
 from algorithm_models.CNN_model import CNN, get_max_index
 from algorithm_models.RNN_model import LSTM
 from algorithm_models.verify_model import SiameseNetwork
-from torch.autograd import Variable
 
 CURR_WORK_DIR = os.path.dirname(__file__)
 CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_param')
@@ -37,6 +38,7 @@ class OnlineRecognizer(threading.Thread):
 
         self.recognize_data_history = []
         self.is_redundant = False
+        self.is_women = False
         # 重复标记 可能有多个有效的识别挨在一起
         # 只要有一个有效识别剩下几个有效的都可以跳过
         # 直到遇到一个无效的被重新置位
@@ -59,6 +61,15 @@ class OnlineRecognizer(threading.Thread):
                     if predict_index == 13:
                         continue
                     if not self.is_redundant:
+
+                        if predict_index == 16:
+                            self.is_women = True
+                        else:
+                            if predict_index != 14:
+                                self.is_women = False
+                            if self.is_women and predict_index == 14:
+                                continue
+
                         self.is_redundant = True
                         return_info = {
                             'index': predict_index,
@@ -87,7 +98,7 @@ class OnlineRecognizer(threading.Thread):
         file_.close()
 
     def stop_thread(self):
-        self.save_history_recognized_data()
+        # self.save_history_recognized_data()
         self.recognize_data_history = []
         self.stop_flag.set()
 
@@ -117,7 +128,7 @@ class VerifyModel:
         reference_vector = Variable(torch.from_numpy(reference_vector).double())
         diff = F.pairwise_distance(data_vector, reference_vector)
         diff = torch.squeeze(diff).data[0]
-        if diff > 0.12:
+        if diff > 0.25:
             return False, diff
         else:
             return True, diff
