@@ -57,6 +57,12 @@ class OnlineRecognizer(threading.Thread):
                 predict_index = get_max_index(classify_output)[0]
                 verify_result, diff = verify_model.verify_correctness(data_mat, predict_index)
 
+                return_info = {
+                    'index': predict_index,
+                    'diff': diff,
+                    'verify_result': str(verify_result)
+                }
+
                 if verify_result:
                     if predict_index == 13:
                         continue
@@ -80,8 +86,8 @@ class OnlineRecognizer(threading.Thread):
                 else:
                     self.is_redundant = False
 
-                # return_info['data'] = new_msg
-                # self.recognize_data_history.append(return_info)
+                return_info['data'] = new_msg
+                self.recognize_data_history.append(return_info)
 
     def add_new_data(self, data):
         self.data_queue.put(data)
@@ -98,6 +104,7 @@ class OnlineRecognizer(threading.Thread):
         file_.close()
 
     def stop_thread(self):
+        #  将识别时输入算法的数据保存起来
         # self.save_history_recognized_data()
         self.recognize_data_history = []
         self.stop_flag.set()
@@ -128,7 +135,7 @@ class VerifyModel:
         reference_vector = Variable(torch.from_numpy(reference_vector).double())
         diff = F.pairwise_distance(data_vector, reference_vector)
         diff = torch.squeeze(diff).data[0]
-        if diff > 0.25:
+        if diff > 0.3:
             return False, diff
         else:
             return True, diff
@@ -201,14 +208,14 @@ def main():
 
             output = offline_rnn_model(data_mat)
             res = generate_offline_recognize_result(output)
-            # correctness, diff = verify_model.verify_correctness(verify_data_mat, res['index'])
-            # res['diff'] = diff
-
-            # if diff < 1.5:
-            #     correctness = True
-            # res['verify_result'] = str(correctness)
-            # if not correctness:
-            #     res['index'] = 13
+            correctness, diff = verify_model.verify_correctness(verify_data_mat, res['index'])
+            res['diff'] = diff
+            #
+            if diff < 1.5:
+                correctness = True
+            res['verify_result'] = str(correctness)
+            if not correctness:
+                res['index'] = 13
 
             res = json.dumps(res)
             print(res)

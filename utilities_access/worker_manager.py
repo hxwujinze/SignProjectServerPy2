@@ -249,9 +249,9 @@ class MainWorkerThread(threading.Thread):
     #  识别结果追加的工作在主线程做
     def append_recognize_result(self, data):
         # 在stop了之后的手语一概忽略
-        # if self.curr_recognize_res is None:
-        #     print("recognize has stopped , append task abandon")
-        #     return
+        if self.curr_recognize_res is None:
+            print("recognize has stopped , append task abandon")
+            return
         print('recognize_result: %s \n' % str(data['res_text']))
         self.curr_recognize_res.append_recognize_result(data['res_text'],
                                                         data['middle_symbol'],
@@ -273,9 +273,6 @@ class MainWorkerThread(threading.Thread):
         self.recognize_process.stop_recognize()
         self.curr_process_request_id = -1
         print("recognize stopped ")
-        # 清空队列
-        while not self.message_q.empty():
-            self.message_q.get()
         self.put_message_into_queue(msg)
 
     def switch_recognize_model(self, data):

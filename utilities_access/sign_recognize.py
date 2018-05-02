@@ -48,7 +48,7 @@ GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '�
                   '老师 ', '发烧 ', '谢谢 ', '', '大家 ', '支持 ', '我们 ', '创新 ', '医生 ', '交流 ',  # 10 - 19
                   '团队 ', '帮助 ', '聋哑人 ', '请 ']  # 20 - 23
 queue_lock = multiprocessing.Lock()
-
+data_scaler = process_data.DataScaler(CURR_DATA_DIR)
 
 """
 手语识别工作线程
@@ -89,7 +89,7 @@ class RecognizeWorker(multiprocessing.Process):
         self.rnn_recg_proc = None
 
         # 手环数据采集周期
-        self._t_s = 0.01
+        self._t_s = 0.012
         self.start_time = None
 
         self.EMG_captured_data = np.array([0])
@@ -131,14 +131,14 @@ class RecognizeWorker(multiprocessing.Process):
             self.recognize_model = 'online'
             self.input_pipe.write(self.recognize_model + '\n')
             self.input_pipe.flush()
-            self.online_recognizer.online_working_flag.set()
+            self.online_recognizer.online_enable_flag.set()
             return
 
         if self.recognize_model != 'offline' and not self.online_mode_enable.is_set():
             self.recognize_model = 'offline'
             self.input_pipe.write(self.recognize_model + '\n')
             self.input_pipe.flush()
-            self.online_recognizer.online_working_flag.clear()
+            self.online_recognizer.online_enable_flag.clear()
             return
 
 
@@ -209,6 +209,7 @@ class RecognizeWorker(multiprocessing.Process):
         print("recognize thread stopped\n")
         self.input_pipe.write('end\n')
         self.rnn_recg_proc.terminate()
+        self.rnn_recg_proc.wait()
 
     # 离线识别 先采集足够的数据 在进行识别
     def offline_recognize(self):
@@ -259,8 +260,9 @@ class RecognizeWorker(multiprocessing.Process):
                     self.online_recognizer.append_data(acc_data, gyr_data, emg_data)
                 cap_start_time = time.clock()
 
-        # todo debug 结束一次采集后  将历史数据保存起来
-        # self.online_recognizer.store_raw_history_data()
+        # debug 结束一次采集后  将历史数据保存起来
+        # self.online_recognizer.data_processor.store_raw_history_data()
+        self.online_recognizer.stop_recognize()
         print("online recognize end at: %s" % time.clock())
         # 识别结束 震动2下
         self.get_left_armband_obj().vibrate(VibrationType.short)
@@ -349,6 +351,8 @@ class RecognizeWorker(multiprocessing.Process):
         data_mat = process_data.append_single_data_feature(acc_data=acc_data_appended,
                                                            gyr_data=gyr_data_appended,
                                                            emg_data=emg_data_appended)
+        data_mat = data_scaler.normalize(data_mat, 'rnn')
+
         acc_verify_data = \
             process_data.feature_extract_single_polyfit(self.ACC_captured_data[16:144, :], 2)
         gyr_verify_data = \
@@ -359,6 +363,7 @@ class RecognizeWorker(multiprocessing.Process):
         verify_data_mat = process_data.append_single_data_feature(acc_data=acc_verify_data,
                                                                   gyr_data=gyr_verify_data,
                                                                   emg_data=emg_verify_data)
+        verify_data_mat = data_scaler.normalize(verify_data_mat, 'cnn')
 
         if CURR_CLASSIFY_STATE == RNN_STATE:
 
@@ -377,8 +382,11 @@ class RecognizeWorker(multiprocessing.Process):
             print('max_prob: %s' % res['max_prob'])
             print('index: %d' % res['index'])
             print('raw_index: %d' % res['raw_index'])
-            # print('verify_result: %s' % res['verify_result'])
-            # print('diff: %s' % res['diff'])
+            try:
+                print('verify_result: %s' % res['verify_result'])
+                print('diff: %s' % res['diff'])
+            except ValueError:
+                pass
             print('**************************************')
 
             return res['index']
@@ -405,16 +413,16 @@ class OnlineRecognizer:
         # 停止工作标记 set之后退出线程
         self.stop_flag = threading.Event()
         # 在线识别工作启用标记 被set之后 在线识别被启用
-        self.online_working_flag = threading.Event()
-        self.online_working_flag.clear()
+        self.online_enable_flag = threading.Event()
+        self.online_enable_flag.clear()
 
         # 当前步进数据段的窗口指针
         self.step_win_start = 0
-        self.step_win_end = random.randint(12, 30)
+        self.step_win_end = random.randint(12, 24)
 
         # 数据缓冲区 用于接受采集的数据
         # 分别对应 acc gyr emg
-        self.data_buffer = ([], [], [])
+        self.data_buffer = [[], [], []]
 
         # 数据处理线程 将采集的数据进行特征提取 scale 等工作
         self.data_processor = DataProcessor(pipe_input,
@@ -427,7 +435,7 @@ class OnlineRecognizer:
         self.result_receiver = ResultReceiver(self.outer_msg_queue,
                                               self.pipe_output,
                                               self.stop_flag,
-                                              self.online_working_flag)
+                                              self.online_enable_flag)
         self.result_receiver.start()
 
 
@@ -447,23 +455,27 @@ class OnlineRecognizer:
 
         # 当步进数据缓冲区都有数据了 将数据传给数据处理对象
         if len(self.data_buffer[0]) >= self.step_win_end:
-            new_data_seg = [each_cap_type_buffer for each_cap_type_buffer in self.data_buffer]
+            new_data_seg = self.data_buffer
             self.data_processor.new_data_queue.put(new_data_seg)
             self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
-        self.step_win_end = random.randint(12, 30)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
+        self.step_win_end = random.randint(12, 24)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
         self.step_win_start = 0
         self.data_buffer = ([], [], [])
 
     def stop_recognize(self):
-        self.online_working_flag.set()
         self.stop_flag.clear()
 
 class DataProcessor(threading.Thread):
     def __init__(self, input_pipe, output_pipe, stop_flag):
         threading.Thread.__init__(self,
                                   name='data_processor', )
+        self.new_data_queue = Queue.Queue()
+        self.stop_flag = stop_flag
+        self.input_pipe = input_pipe
+        self.output_pipe = output_pipe
+
         self.normalized_data_buffer = {
             'acc': None,
             'gyr': None,
@@ -475,82 +487,45 @@ class DataProcessor(threading.Thread):
             'gyr': None,
             'emg': None,
         }
-
-        self.new_data_queue = Queue.Queue()
-        self.stop_flag = stop_flag
-        self.input_pipe = input_pipe
-        self.output_pipe = output_pipe
-
         self.start_ptr = 0
         self.end_ptr = 0
-        self.norm_ptr_start = 0
-        self.norm_ptr_end = 288  # (288 - 128 )  = 160  相差10个窗口
         self.extract_ptr_start = 0
         self.extract_ptr_end = 128
+
 
     def run(self):
         while not self.stop_flag.isSet():
             time.sleep(0.08)
             while not self.new_data_queue.empty():
                 self.append_raw_data()
-                if self.end_ptr >= self.norm_ptr_end:
-                    self.normalize_data()
-                if self.norm_ptr_end >= self.extract_ptr_end:
+                if self.end_ptr >= self.extract_ptr_end:
                     self.feat_extract_and_send()
-
+        # 保存历史数据
         self.input_pipe.write('end\n')
         self.input_pipe.flush()
 
     def append_raw_data(self):
         new_seg_data = self.new_data_queue.get()
         type_list = ['acc', 'gyr', 'emg']
-        for each_type in range(len(type_list)):
-            if self.raw_data_buffer[type_list[each_type]] is None:
-                self.raw_data_buffer[type_list[each_type]] = new_seg_data[each_type]
+        for each_type_index in range(len(type_list)):
+            each_type_name = type_list[each_type_index]
+            if self.raw_data_buffer[each_type_name] is None:
+                self.raw_data_buffer[each_type_name] = np.array(new_seg_data[each_type_index])
             else:
-                self.raw_data_buffer[type_list[each_type]] = \
-                    np.vstack((self.raw_data_buffer[type_list[each_type]], new_seg_data[each_type]))
+                self.raw_data_buffer[each_type_name] = \
+                    np.vstack((self.raw_data_buffer[each_type_name], new_seg_data[each_type_index]))
         self.end_ptr += len(new_seg_data[0])  # 更新buffer长度
 
-    def normalize_data(self):
-        type_list = ['acc', 'gyr']
-        for each_type in type_list:
-            # todo 这里选择是否归一化
-            tmp = process_data.normalize(self.raw_data_buffer[each_type][self.norm_ptr_start:self.norm_ptr_end, :])
-            # tmp = raw_data[each_type][normalized_ptr_start:normalized_ptr_end, :]
-            if self.normalized_data_buffer[each_type] is None:
-                self.normalized_data_buffer[each_type] = tmp
-            else:
-                # todo 可能需要调整
-                self.normalized_data_buffer[each_type] = np.vstack(
-                    (self.normalized_data_buffer[each_type], tmp[-128:, :]))
-        self.norm_ptr_start += 128
-        self.norm_ptr_end += 128
 
     def feat_extract_and_send(self):
-        acc_data = self.normalized_data_buffer['acc'][self.extract_ptr_start:self.extract_ptr_end, :]
-        gyr_data = self.normalized_data_buffer['gyr'][self.extract_ptr_start:self.extract_ptr_end, :]
+        acc_data = self.raw_data_buffer['acc'][self.extract_ptr_start:self.extract_ptr_end, :]
+        gyr_data = self.raw_data_buffer['gyr'][self.extract_ptr_start:self.extract_ptr_end, :]
         emg_data = self.raw_data_buffer['emg'][self.extract_ptr_start:self.extract_ptr_end, :]
         data_mat = self.create_data_seg(acc_data, gyr_data, emg_data)
         self.send_to_recognize_process(data_mat)
-        self.extract_ptr_end += 16
-        self.extract_ptr_start += 16
-        pass
-
-    @staticmethod
-    def create_data_seg(acc_data, gyr_data, emg_data):
-        acc_data = np.array(acc_data)
-        gyr_data = np.array(gyr_data)
-        emg_data = np.array(emg_data)
-        acc_data = process_data.feature_extract_single_polyfit(acc_data, 2)
-        gyr_data = process_data.feature_extract_single_polyfit(gyr_data, 2)
-        emg_data = process_data.wavelet_trans(emg_data)
-        emg_data = process_data.expand_emg_data_single(emg_data)
-        # 将三种采集类型进行拼接
-        data_mat = process_data.append_single_data_feature(acc_data=acc_data,
-                                                           gyr_data=gyr_data,
-                                                           emg_data=emg_data)
-        return data_mat
+        extract_step = random.randint(8, 24)
+        self.extract_ptr_end += extract_step
+        self.extract_ptr_start += extract_step
 
     def send_to_recognize_process(self, data_mat):
         data_pickle_str = my_pickle.dumps(data_mat)
@@ -568,17 +543,31 @@ class DataProcessor(threading.Thread):
         self.clean_buffer()
 
     def clean_buffer(self):
-        self.normalized_data_buffer = {
-            'acc': None,
-            'gyr': None,
-            #    不需要normalize emg数据 直接使用raw 即可
-        }
 
         self.raw_data_buffer = {
             'acc': None,
             'gyr': None,
             'emg': None,
         }
+        self.start_ptr = 0
+        self.end_ptr = 0
+        self.extract_ptr_start = 0
+        self.extract_ptr_end = 128
+
+    @staticmethod
+    def create_data_seg(acc_data, gyr_data, emg_data):
+        acc_data = np.array(acc_data)
+        gyr_data = np.array(gyr_data)
+        emg_data = np.array(emg_data)
+        acc_data = process_data.feature_extract_single_polyfit(acc_data, 2)
+        gyr_data = process_data.feature_extract_single_polyfit(gyr_data, 2)
+        emg_data = process_data.wavelet_trans(emg_data)
+        emg_data = process_data.expand_emg_data_single(emg_data)
+        # 将三种采集类型进行拼接
+        data_mat = process_data.append_single_data_feature(acc_data=acc_data,
+                                                           gyr_data=gyr_data,
+                                                           emg_data=emg_data)
+        return data_scaler.normalize(data_mat, 'cnn')
 
 
 

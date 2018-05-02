@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 
-LEARNING_RATE = 0.0001
+LEARNING_RATE = 0.00015
 WEIGHT_DECAY = 0.00000002
-EPOCH = 1000
+EPOCH = 1300
 BATCH_SIZE = 64
 
 class CNN(nn.Module):
@@ -12,6 +12,7 @@ class CNN(nn.Module):
 
         # input 14 x 64
         self.conv1 = nn.Sequential(
+            # nn.BatchNorm1d(14),
             nn.Conv1d(
                 in_channels=14,
                 out_channels=32,
@@ -22,33 +23,29 @@ class CNN(nn.Module):
             # output 28 x 64
             nn.BatchNorm1d(32),
             nn.LeakyReLU(),
-            # nn.ReLU(),
             nn.MaxPool1d(kernel_size=3)  # 28 x 21
         )
 
         self.conv2 = nn.Sequential(
             nn.Conv1d(
                 in_channels=32,
-                out_channels=40,
+                out_channels=46,
                 kernel_size=3,
                 padding=1,
                 stride=1
             ),  # 32 x 16
-            nn.BatchNorm1d(40),
+            nn.BatchNorm1d(46),
             nn.LeakyReLU(),
-            # nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2),  # 40 x 11
+            nn.MaxPool1d(kernel_size=2),  # 40 x 10
         )
 
         self.out1 = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(40 * 10, 256),
             nn.LeakyReLU(),
             nn.Dropout(),
-            nn.Linear(256, 128),
+            nn.Linear(46 * 10, 256),
             nn.LeakyReLU(),
             nn.Dropout(),
-            nn.Linear(128, 24),
+            nn.Linear(256, 24),
             nn.Softmax(),
         )
 

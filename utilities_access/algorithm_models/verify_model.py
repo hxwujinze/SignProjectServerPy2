@@ -7,10 +7,10 @@ import torch.nn.functional as F
 # CNN: input len -> output len
 # Lout=floor((Lin+2∗padding−dilation∗(kernel_size−1)−1)/stride+1)
 
-LEARNING_RATE = 0.0001
+LEARNING_RATE = 0.00025
 WEIGHT_DECAY = 0.0000002
-EPOCH = 500
-BATCH_SIZE = 32
+EPOCH = 860
+BATCH_SIZE = 64
 
 class SiameseNetwork(nn.Module):
     def __init__(self, train=True):
@@ -25,6 +25,7 @@ class SiameseNetwork(nn.Module):
             self.status = 'eval'
 
         self.cnn1 = nn.Sequential(
+            # nn.BatchNorm1d(14),
             nn.Conv1d(  # 14 x 64
                 in_channels=14,
                 out_channels=32,
@@ -32,12 +33,11 @@ class SiameseNetwork(nn.Module):
                 padding=2,
                 stride=1,
             ),  # 32 x 64
-            # need Norm
-            # 通常插入在激活函数和C/FC层之间 对神经网络的中间参数进行normalization
+            # 通常插入在激活函数和FC层之间 对神经网络的中间参数进行normalization
             nn.BatchNorm1d(32),  # 32 x 64
             nn.LeakyReLU(),
             # only one pooling
-            nn.MaxPool1d(kernel_size=2),  # 32 x 32
+            nn.MaxPool1d(kernel_size=3),  # 32 x 21
 
             nn.Conv1d(
                 in_channels=32,
@@ -46,20 +46,18 @@ class SiameseNetwork(nn.Module):
                 padding=1,
                 stride=1
             ),  # 60 x 32
-            nn.BatchNorm1d(32),  # 60 x 32
-            nn.LeakyReLU(),
-            # nn.MaxPool1d(kernel_size=2),  # 32 x 8
+            nn.BatchNorm1d(32),  # 32 x 21
+            # nn.LeakyReLU(),
+            # nn.MaxPool1d(kernel_size=2),  # 32 x 21
         )
 
         self.out = nn.Sequential(
-            nn.Dropout(),
-            nn.Linear(32 * 32, 512),
             nn.LeakyReLU(),
             nn.Dropout(),
-            nn.Linear(512, 256),
+            nn.Linear(32 * 21, 256),
             nn.LeakyReLU(),
             nn.Dropout(),
-            nn.Linear(256, 128)
+            nn.Linear(256, 128),
         )
 
     def forward_once(self, x):

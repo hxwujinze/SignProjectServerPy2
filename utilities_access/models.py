@@ -140,7 +140,7 @@ def pickle_cap_data2file():
     # 最后获得的列表是
     # [ (sign_id , 数据的字典 ) , .... ]
 
-    file = open(os.path.join(CURR_DATA_DIR, 'feedback_data_', 'w+b'))
+    file = open(os.path.join(CURR_DATA_DIR, 'feedback_data_'), 'w+b')
     pickle.dump(data_list, file)
     file.close()
 
