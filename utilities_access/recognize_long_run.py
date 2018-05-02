@@ -156,8 +156,8 @@ def load_model_param(model, model_type_name):
 def generate_offline_recognize_result(tensor):
     prob_each_sign = torch.squeeze(tensor).data.numpy()
     max_res = torch.max(tensor, dim=1)
-    max_value = max_res[0].data.float()[0]
-    raw_index = max_res[1].data.int()[0]
+    max_value = max_res[0].data.float()[0][0]
+    raw_index = max_res[1].data.int()[0][0]
     if max_value < 0.20:
         index = 13
     else:

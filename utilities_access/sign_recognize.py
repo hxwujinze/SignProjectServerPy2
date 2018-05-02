@@ -28,15 +28,15 @@ MAX_CAPTURE_TIME = 90
 RNN_STATE = 566
 SVM_STATE = 852
 
-# todo 在这里进行更改识别算法
+# 在这里进行更改识别算法
 CURR_CLASSIFY_STATE = RNN_STATE
 
 CURR_WORK_DIR = os.path.join(os.getcwd(), 'utilities_access')
 CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_param')
 
-# todo 这里键入python3路径 for pytroch运行
-PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
-# PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
+# 这里键入python3路径 for pytroch运行
+# PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
+PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
 
 
 # 这里将模型装载进来
@@ -89,7 +89,7 @@ class RecognizeWorker(multiprocessing.Process):
         self.rnn_recg_proc = None
 
         # 手环数据采集周期
-        self._t_s = 0.012
+        self._t_s = 0.01
         self.start_time = None
 
         self.EMG_captured_data = np.array([0])
@@ -353,24 +353,16 @@ class RecognizeWorker(multiprocessing.Process):
                                                            emg_data=emg_data_appended)
         data_mat = data_scaler.normalize(data_mat, 'rnn')
 
-        acc_verify_data = \
-            process_data.feature_extract_single_polyfit(self.ACC_captured_data[16:144, :], 2)
-        gyr_verify_data = \
-            process_data.feature_extract_single_polyfit(self.GYR_captured_data[16:144, :], 2)
-        emg_verify_data = process_data.wavelet_trans(self.EMG_captured_data[16:144, :])
-        emg_verify_data = process_data.expand_emg_data_single(emg_verify_data)
-
-        verify_data_mat = process_data.append_single_data_feature(acc_data=acc_verify_data,
-                                                                  gyr_data=gyr_verify_data,
-                                                                  emg_data=emg_verify_data)
-        verify_data_mat = data_scaler.normalize(verify_data_mat, 'cnn')
+        # 生成用验证的数据mat
+        verify_data_mat = self.generate_varify_data_mat()
 
         if CURR_CLASSIFY_STATE == RNN_STATE:
 
             # 通过pipe向之前启动的py3识别进程发送识别数据id
             data_mat_pickle_str = my_pickle.dumps(data_mat)
             verify_data_mat = my_pickle.dumps(verify_data_mat)
-            self.input_pipe.write(data_mat_pickle_str + '|' + verify_data_mat + '\n')
+            data_str = data_mat_pickle_str + '|' + verify_data_mat
+            self.input_pipe.write(data_str + '\n')
             self.input_pipe.flush()
 
             res = self.output_pipe.readline()
@@ -396,6 +388,18 @@ class RecognizeWorker(multiprocessing.Process):
         # res = int(CLF.predict(data_mat.ravel()))
         # return res
 
+    def generate_varify_data_mat(self):
+        acc_verify_data = \
+            process_data.feature_extract_single_polyfit(self.ACC_captured_data[16:144, :], 2)
+        gyr_verify_data = \
+            process_data.feature_extract_single_polyfit(self.GYR_captured_data[16:144, :], 2)
+        emg_verify_data = process_data.wavelet_trans(self.EMG_captured_data[16:144, :])
+        emg_verify_data = process_data.expand_emg_data_single(emg_verify_data)
+
+        verify_data_mat = process_data.append_single_data_feature(acc_data=acc_verify_data,
+                                                                  gyr_data=gyr_verify_data,
+                                                                  emg_data=emg_verify_data)
+        return data_scaler.normalize(verify_data_mat, 'cnn')
 
     def get_left_armband_obj(self):
         return self.paired_armbands[0]
@@ -501,6 +505,7 @@ class DataProcessor(threading.Thread):
                 if self.end_ptr >= self.extract_ptr_end:
                     self.feat_extract_and_send()
         # 保存历史数据
+        # self.store_raw_history_data()
         self.input_pipe.write('end\n')
         self.input_pipe.flush()
 
