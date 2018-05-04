@@ -43,10 +43,9 @@ PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
 # CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
 
 
-
-GESTURES_TABLE = ['肉 ', '鸡蛋 ', '喜欢 ', '您好 ', '你 ', '什么 ', '想 ', '我 ', '很 ', '吃 ',  # 0-9
-                  '老师 ', '发烧 ', '谢谢 ', '', '大家 ', '支持 ', '我们 ', '创新 ', '医生 ', '交流 ',  # 10 - 19
-                  '团队 ', '帮助 ', '聋哑人 ', '请 ']  # 20 - 23
+GESTURES_TABLE = [u'肉 ', u'鸡蛋 ', u'喜欢 ', u'您好 ', u'你 ', u'什么 ', u'想 ', u'我 ', u'很 ', u'吃 ',  # 0-9
+                  u'老师 ', u'发烧 ', u'谢谢 ', u'', u'大家 ', u'支持 ', u'我们 ', u'创新 ', u'医生 ', u'交流 ',  # 10 - 19
+                  u'团队 ', u'帮助 ', u'聋哑人 ', u'请 ']  # 20 - 23
 queue_lock = multiprocessing.Lock()
 data_scaler = process_data.DataScaler(CURR_DATA_DIR)
 
@@ -377,7 +376,7 @@ class RecognizeWorker(multiprocessing.Process):
             try:
                 print('verify_result: %s' % res['verify_result'])
                 print('diff: %s' % res['diff'])
-            except ValueError:
+            except:
                 pass
             print('**************************************')
 
@@ -503,6 +502,11 @@ class DataProcessor(threading.Thread):
             while not self.new_data_queue.empty():
                 self.append_raw_data()
                 if self.end_ptr >= self.extract_ptr_end:
+                    # step_size  = self.end_ptr - self.extract_ptr_end
+                    self.extract_ptr_end = self.end_ptr
+                    self.extract_ptr_start = self.extract_ptr_end - 128
+                    # print("extract windows (%d, %d) step size %d" %
+                    #       (self.extract_ptr_start, self.extract_ptr_end, step_size))
                     self.feat_extract_and_send()
         # 保存历史数据
         # self.store_raw_history_data()
@@ -528,9 +532,6 @@ class DataProcessor(threading.Thread):
         emg_data = self.raw_data_buffer['emg'][self.extract_ptr_start:self.extract_ptr_end, :]
         data_mat = self.create_data_seg(acc_data, gyr_data, emg_data)
         self.send_to_recognize_process(data_mat)
-        extract_step = random.randint(8, 24)
-        self.extract_ptr_end += extract_step
-        self.extract_ptr_start += extract_step
 
     def send_to_recognize_process(self, data_mat):
         data_pickle_str = my_pickle.dumps(data_mat)
@@ -665,7 +666,7 @@ def generate_recognize_subprocces():
     pipe_input = rnn_sub_process.stdin
     pipe_output = rnn_sub_process.stdout
     pipe_err = rnn_sub_process.stderr
-    print('pid %d' % rnn_sub_process.pid)
+    print('recognize subprocess started, pid %d' % rnn_sub_process.pid)
     return pipe_input, pipe_output, pipe_err, rnn_sub_process
 
 # #################### rnn  sector ##############

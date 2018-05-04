@@ -208,14 +208,13 @@ def main():
 
             output = offline_rnn_model(data_mat)
             res = generate_offline_recognize_result(output)
-            correctness, diff = verify_model.verify_correctness(verify_data_mat, res['index'])
-            res['diff'] = diff
-            #
-            if diff < 1.5:
-                correctness = True
-            res['verify_result'] = str(correctness)
-            if not correctness:
-                res['index'] = 13
+            # correctness, diff = verify_model.verify_correctness(verify_data_mat, res['index'])
+            # res['diff'] = diff
+            # if diff < 2:
+            #     correctness = True
+            # res['verify_result'] = str(correctness)
+            # if not correctness:
+            #     res['index'] = 13
 
             res = json.dumps(res)
             print(res)

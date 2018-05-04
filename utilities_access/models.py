@@ -74,7 +74,7 @@ class RecognizeInfo:
         return data
 
     def append_recognize_result(self, text, middle_symbol, raw_capture_data):
-        self.result_text += str(text)
+        self.result_text += text
         self.middle_symbol += "\n" + str(middle_symbol)
 
         SingleSignCapture.objects.create(
