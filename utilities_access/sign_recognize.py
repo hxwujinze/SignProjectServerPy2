@@ -502,11 +502,11 @@ class DataProcessor(threading.Thread):
             while not self.new_data_queue.empty():
                 self.append_raw_data()
                 if self.end_ptr >= self.extract_ptr_end:
-                    # step_size  = self.end_ptr - self.extract_ptr_end
+                    step_size = self.end_ptr - self.extract_ptr_end
                     self.extract_ptr_end = self.end_ptr
                     self.extract_ptr_start = self.extract_ptr_end - 128
-                    # print("extract windows (%d, %d) step size %d" %
-                    #       (self.extract_ptr_start, self.extract_ptr_end, step_size))
+                    print("extract windows (%d, %d) step size %d" %
+                          (self.extract_ptr_start, self.extract_ptr_end, step_size))
                     self.feat_extract_and_send()
         # 保存历史数据
         # self.store_raw_history_data()
