@@ -17,7 +17,7 @@ from . import my_pickle
 from . import process_data
 from .utilities_classes import Message
 
-armbands_manager.update_connected_list()
+# armbands_manager.update_connected_list()
 
 GESTURE_SIZE = 160
 CAPTURE_SIZE = 160
@@ -352,16 +352,13 @@ class RecognizeWorker(multiprocessing.Process):
                                                            emg_data=emg_data_appended)
         data_mat = data_scaler.normalize(data_mat, 'rnn')
 
-        # 生成用验证的数据mat
-        verify_data_mat = self.generate_varify_data_mat()
 
         if CURR_CLASSIFY_STATE == RNN_STATE:
 
             # 通过pipe向之前启动的py3识别进程发送识别数据id
             data_mat_pickle_str = my_pickle.dumps(data_mat)
-            verify_data_mat = my_pickle.dumps(verify_data_mat)
-            data_str = data_mat_pickle_str + '|' + verify_data_mat
-            self.input_pipe.write(data_str + '\n')
+            # print data_mat_pickle_str
+            self.input_pipe.write(data_mat_pickle_str + '\n')
             self.input_pipe.flush()
 
             res = self.output_pipe.readline()
@@ -376,7 +373,8 @@ class RecognizeWorker(multiprocessing.Process):
             try:
                 print('verify_result: %s' % res['verify_result'])
                 print('diff: %s' % res['diff'])
-            except:
+            except KeyError:
+                # 没有启用验证模型时 直接跳过
                 pass
             print('**************************************')
 
@@ -421,7 +419,7 @@ class OnlineRecognizer:
 
         # 当前步进数据段的窗口指针
         self.step_win_start = 0
-        self.step_win_end = random.randint(12, 24)
+        self.step_win_end = random.randint(8, 24)
 
         # 数据缓冲区 用于接受采集的数据
         # 分别对应 acc gyr emg
@@ -463,7 +461,7 @@ class OnlineRecognizer:
             self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
-        self.step_win_end = random.randint(12, 24)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
+        self.step_win_end = random.randint(8, 24)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
         self.step_win_start = 0
         self.data_buffer = ([], [], [])
 

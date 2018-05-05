@@ -36,6 +36,8 @@ class OnlineRecognizer(threading.Thread):
         self.cnn_model.eval()
         self.cnn_model.cpu()
 
+        self.verify_model = VerifyModel('cnn')
+
         self.recognize_data_history = []
         self.is_redundant = False
         self.is_women = False
@@ -55,7 +57,7 @@ class OnlineRecognizer(threading.Thread):
                 # 分类并检验
                 classify_output = self.cnn_model(data_mat)
                 predict_index = get_max_index(classify_output)[0]
-                verify_result, diff = verify_model.verify_correctness(data_mat, predict_index)
+                verify_result, diff = self.verify_model.verify_correctness(data_mat, predict_index)
 
                 return_info = {
                     'index': predict_index,
@@ -114,14 +116,14 @@ class VerifyModel:
     验证模型
     """
 
-    def __init__(self):
-        self.verify_model = SiameseNetwork(train=False)  # verify model
-        load_model_param(self.verify_model, 'verify_model')
+    def __init__(self, model_type):
+        self.verify_model = SiameseNetwork(train=False, model_type=model_type)  # verify model
+        load_model_param(self.verify_model, 'verify_model_%s' % model_type)
         self.verify_model.double()
         self.verify_model.eval()
         self.verify_model.cpu()
 
-        vector_file_path = os.path.join(CURR_DATA_DIR, 'reference_verify_vector')
+        vector_file_path = os.path.join(CURR_DATA_DIR, 'reference_verify_vector_%s' % model_type)
         file_ = open(vector_file_path, 'rb')
         self.reference_vectors = pickle.load(file_)  # reference vector
         file_.close()
@@ -196,26 +198,23 @@ def main():
             continue
         if mode == 'offline':
             # offline mode 会带有一个用于验证的data mat 使用 | 分割
-            data_mats = read_.split('|')
-            data_mat = my_pickle.loads(data_mats[0])
+            data_mats = read_
+            data_mat = my_pickle.loads(data_mats)
             data_mat = torch.from_numpy(np.array([data_mat])).float()
+            verify_data_mat = data_mat.double()
+            verify_data_mat = Variable(verify_data_mat)
             data_mat = Variable(data_mat)
             # numpy -> Variable
-            verify_data_mat = my_pickle.loads(data_mats[1])
-            verify_data_mat = np.array([verify_data_mat.T])
-            verify_data_mat = torch.from_numpy(verify_data_mat).double()
-            verify_data_mat = Variable(verify_data_mat)
-
             output = offline_rnn_model(data_mat)
             res = generate_offline_recognize_result(output)
-            # correctness, diff = verify_model.verify_correctness(verify_data_mat, res['index'])
-            # res['diff'] = diff
-            # if diff < 2:
-            #     correctness = True
-            # res['verify_result'] = str(correctness)
-            # if not correctness:
-            #     res['index'] = 13
+            correctness, diff = offline_verify_model.verify_correctness(verify_data_mat, res['index'])
+            if diff < 0.5:
+                correctness = True
+            if not correctness:
+                res['index'] = 13
 
+            res['verify_result'] = str(correctness)
+            res['diff'] = diff
             res = json.dumps(res)
             print(res)
 
@@ -227,5 +226,5 @@ def main():
 if __name__ == '__main__':
     offline_rnn_model = LSTM()
     offline_rnn_model = load_model_param(offline_rnn_model, 'rnn_model')
-    verify_model = VerifyModel()
+    offline_verify_model = VerifyModel('rnn')
     main()
