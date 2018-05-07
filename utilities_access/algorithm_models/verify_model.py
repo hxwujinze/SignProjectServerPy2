@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 LEARNING_RATE = 0.000125
 WEIGHT_DECAY = 0.0000002
-EPOCH = 900
+EPOCH = 800
 BATCH_SIZE = 64
 
 class SiameseNetwork(nn.Module):
@@ -44,19 +44,23 @@ class SiameseNetwork(nn.Module):
 
                 nn.Conv1d(
                     in_channels=32,
-                    out_channels=32,
+                    out_channels=40,
                     kernel_size=3,
                     padding=1,
                     stride=1
-                ),  # 60 x 32
-                nn.BatchNorm1d(32),  # 32 x 21
+                ),  # 40 x 21
+                nn.BatchNorm1d(40),  # 40 x 21
+
             )
             self.out = nn.Sequential(
-                nn.LeakyReLU(),
                 nn.Dropout(),
-                nn.Linear(32 * 21, 256),
                 nn.LeakyReLU(),
+                nn.Linear(40 * 21, 512),
                 nn.Dropout(),
+                nn.LeakyReLU(),
+                nn.Linear(512, 256),
+                nn.Dropout(),
+                nn.LeakyReLU(),
                 nn.Linear(256, 128),
             )
 
@@ -64,12 +68,12 @@ class SiameseNetwork(nn.Module):
             global LEARNING_RATE
             global EPOCH
             global BATCH_SIZE
-            LEARNING_RATE = 0.0004
+            LEARNING_RATE = 0.0003
             EPOCH = 1000
             BATCH_SIZE = 64
 
             INPUT_SIZE = 30  # 2 *（3 + 3 + 5） + 8
-            NNet_SIZE = 40
+            NNet_SIZE = 32
             NNet_LEVEL = 3
             NNet_output_size = 32
 
@@ -81,7 +85,6 @@ class SiameseNetwork(nn.Module):
                 dropout=0.5
             )
             self.out = nn.Sequential(
-                nn.BatchNorm1d(NNet_SIZE),
                 nn.LeakyReLU(),
                 nn.Dropout(),
                 nn.Linear(NNet_SIZE, NNet_SIZE),

@@ -64,7 +64,8 @@ class OnlineRecognizer(threading.Thread):
                     'diff': diff,
                     'verify_result': str(verify_result)
                 }
-
+                # return all
+                # print(json.dumps(return_info))
                 if verify_result:
                     if predict_index == 13:
                         continue
@@ -77,13 +78,7 @@ class OnlineRecognizer(threading.Thread):
                                 self.is_women = False
                             if self.is_women and predict_index == 14:
                                 continue
-
                         self.is_redundant = True
-                        return_info = {
-                            'index': predict_index,
-                            'diff': diff,
-                            'verify_result': str(verify_result)
-                        }
                         print(json.dumps(return_info))
                 else:
                     self.is_redundant = False

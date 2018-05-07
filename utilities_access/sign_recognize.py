@@ -49,6 +49,7 @@ GESTURES_TABLE = [u'肉 ', u'鸡蛋 ', u'喜欢 ', u'您好 ', u'你 ', u'什么
 queue_lock = multiprocessing.Lock()
 data_scaler = process_data.DataScaler(CURR_DATA_DIR)
 
+
 """
 手语识别工作线程
 每次识别中 手环的连接时间是唯一的 几乎不会冲突
@@ -409,6 +410,7 @@ class OnlineRecognizer:
 
     def __init__(self, message_q, pipe_input, pipe_output):
         self.outer_msg_queue = message_q
+        self.timer_queue = Queue.Queue()
         self.pipe_input = pipe_input
         self.pipe_output = pipe_output
         # 停止工作标记 set之后退出线程
@@ -419,7 +421,7 @@ class OnlineRecognizer:
 
         # 当前步进数据段的窗口指针
         self.step_win_start = 0
-        self.step_win_end = random.randint(8, 24)
+        self.step_win_end = random.randint(8, 20)
 
         # 数据缓冲区 用于接受采集的数据
         # 分别对应 acc gyr emg
@@ -428,15 +430,18 @@ class OnlineRecognizer:
         # 数据处理线程 将采集的数据进行特征提取 scale 等工作
         self.data_processor = DataProcessor(pipe_input,
                                             pipe_output,
-                                            self.stop_flag)
+                                            self.stop_flag,
+                                            self.timer_queue)
         self.data_processor.start()
+
 
         # 识别结果接受线程 当收到新的识别结果时
         # 将识别结果放入与工作线程通讯的消息队列 作为识别出的结果
         self.result_receiver = ResultReceiver(self.outer_msg_queue,
                                               self.pipe_output,
                                               self.stop_flag,
-                                              self.online_enable_flag)
+                                              self.online_enable_flag,
+                                              self.timer_queue)
         self.result_receiver.start()
 
 
@@ -461,7 +466,8 @@ class OnlineRecognizer:
             self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
-        self.step_win_end = random.randint(8, 24)  # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
+        self.step_win_end = random.randint(8, 20)
+        # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
         self.step_win_start = 0
         self.data_buffer = ([], [], [])
 
@@ -469,10 +475,11 @@ class OnlineRecognizer:
         self.stop_flag.clear()
 
 class DataProcessor(threading.Thread):
-    def __init__(self, input_pipe, output_pipe, stop_flag):
+    def __init__(self, input_pipe, output_pipe, stop_flag, timer_queue):
         threading.Thread.__init__(self,
                                   name='data_processor', )
         self.new_data_queue = Queue.Queue()
+        self.timer_queue = timer_queue
         self.stop_flag = stop_flag
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
@@ -503,8 +510,8 @@ class DataProcessor(threading.Thread):
                     step_size = self.end_ptr - self.extract_ptr_end
                     self.extract_ptr_end = self.end_ptr
                     self.extract_ptr_start = self.extract_ptr_end - 128
-                    print("extract windows (%d, %d) step size %d" %
-                          (self.extract_ptr_start, self.extract_ptr_end, step_size))
+                    # print("extract windows (%d, %d) step size %d" %
+                    #       (self.extract_ptr_start, self.extract_ptr_end, step_size))
                     self.feat_extract_and_send()
         # 保存历史数据
         # self.store_raw_history_data()
@@ -525,13 +532,14 @@ class DataProcessor(threading.Thread):
 
 
     def feat_extract_and_send(self):
+        self.timer_queue.put(time.clock())
         acc_data = self.raw_data_buffer['acc'][self.extract_ptr_start:self.extract_ptr_end, :]
         gyr_data = self.raw_data_buffer['gyr'][self.extract_ptr_start:self.extract_ptr_end, :]
         emg_data = self.raw_data_buffer['emg'][self.extract_ptr_start:self.extract_ptr_end, :]
         data_mat = self.create_data_seg(acc_data, gyr_data, emg_data)
-        self.send_to_recognize_process(data_mat)
+        self._send_to_recognize_process(data_mat)
 
-    def send_to_recognize_process(self, data_mat):
+    def _send_to_recognize_process(self, data_mat):
         data_pickle_str = my_pickle.dumps(data_mat)
         self.input_pipe.write(data_pickle_str + '\n')
         self.input_pipe.flush()  # 用flush保证字节流及时被传入识别线程
@@ -577,10 +585,11 @@ class DataProcessor(threading.Thread):
 
 # 在线识别启动时 启用识别结果接受线程
 class ResultReceiver(threading.Thread):
-    def __init__(self, message_q, output_pipe, stop_flag, online_enable_flag):
+    def __init__(self, message_q, output_pipe, stop_flag, online_enable_flag, timer_queue):
         threading.Thread.__init__(self)
         self.message_q = message_q
         # 向主线程返回消息的消息队列
+        self.timer_q = timer_queue
         self.output_pipe = output_pipe
         # 来自识别算法线程的输出pipe
         self.stop_flag = stop_flag
@@ -599,9 +608,14 @@ class ResultReceiver(threading.Thread):
                 except ValueError:
                     # 取出上次加入阻塞在pipe里的内容
                     break
-
+                time_tag = self.timer_q.get()
+                end_time = time.clock()
+                cost_time = end_time - time_tag
                 print('**************************************')
                 print('online recognize result:')
+                # print('start time %f' % time_tag)
+                # print("end time %f" % end_time)
+                # print('cost time %f' % cost_time)
                 print('diff: %s' % res['diff'])
                 print('index: %d' % res['index'])
                 print('verify_result: %s' % res['verify_result'])
