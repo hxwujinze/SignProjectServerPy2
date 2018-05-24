@@ -7,9 +7,8 @@ import torch.nn.functional as F
 # CNN: input len -> output len
 # Lout=floor((Lin+2∗padding−dilation∗(kernel_size−1)−1)/stride+1)
 
-LEARNING_RATE = 0.000125
-WEIGHT_DECAY = 0.0000002
-EPOCH = 800
+
+WEIGHT_DECAY = 0.000002
 BATCH_SIZE = 64
 
 class SiameseNetwork(nn.Module):
@@ -27,13 +26,25 @@ class SiameseNetwork(nn.Module):
         self.model_type = model_type
 
         if model_type == 'cnn':
+            self.LEARNING_RATE = 0.00022
+            self.EPOCH = 800
             self.coding_model = nn.Sequential(
-                # nn.BatchNorm1d(14),
                 nn.Conv1d(  # 14 x 64
                     in_channels=14,
                     out_channels=32,
-                    kernel_size=4,
-                    padding=2,
+                    kernel_size=3,
+                    padding=1,
+                    stride=1,
+                ),  # 32 x 64
+                # 通常插入在激活函数和FC层之间 对神经网络的中间参数进行normalization
+                nn.BatchNorm1d(32),  # 32 x 64
+                nn.LeakyReLU(),
+
+                nn.Conv1d(  # 14 x 64
+                    in_channels=32,
+                    out_channels=32,
+                    kernel_size=3,
+                    padding=1,
                     stride=1,
                 ),  # 32 x 64
                 # 通常插入在激活函数和FC层之间 对神经网络的中间参数进行normalization
@@ -44,47 +55,55 @@ class SiameseNetwork(nn.Module):
 
                 nn.Conv1d(
                     in_channels=32,
-                    out_channels=40,
+                    out_channels=64,
                     kernel_size=3,
                     padding=1,
                     stride=1
                 ),  # 40 x 21
-                nn.BatchNorm1d(40),  # 40 x 21
+                nn.BatchNorm1d(64),  # 40 x 21
+                nn.LeakyReLU(),
+
+                nn.Conv1d(
+                    in_channels=64,
+                    out_channels=64,
+                    kernel_size=3,
+                    padding=1,
+                    stride=1
+                ),  # 40 x 21
+                nn.BatchNorm1d(64),  # 40 x 21
+                nn.LeakyReLU(),
 
             )
             self.out = nn.Sequential(
+                nn.Linear(64 * 21, 1024),
                 nn.Dropout(),
                 nn.LeakyReLU(),
-                nn.Linear(40 * 21, 512),
+                nn.Linear(1024, 1024),
                 nn.Dropout(),
                 nn.LeakyReLU(),
-                nn.Linear(512, 256),
-                nn.Dropout(),
-                nn.LeakyReLU(),
-                nn.Linear(256, 128),
+                nn.Linear(1024, 256),
             )
 
         elif model_type == 'rnn':
-            global LEARNING_RATE
-            global EPOCH
-            global BATCH_SIZE
-            LEARNING_RATE = 0.0003
-            EPOCH = 1000
-            BATCH_SIZE = 64
+            self.LEARNING_RATE = 0.0006
+            self.EPOCH = 1100
 
             INPUT_SIZE = 30  # 2 *（3 + 3 + 5） + 8
-            NNet_SIZE = 32
+            NNet_SIZE = 64
             NNet_LEVEL = 3
-            NNet_output_size = 32
+            NNet_output_size = 64
 
             self.coding_model = nn.LSTM(
                 input_size=INPUT_SIZE,  # feature's number
                 hidden_size=NNet_SIZE,  # hidden size of rnn layers
                 num_layers=NNet_LEVEL,  # the number of rnn layers
                 batch_first=True,
-                dropout=0.5
+                dropout=0.5,
+
             )
             self.out = nn.Sequential(
+                nn.LeakyReLU(),
+                nn.Linear(NNet_SIZE, NNet_SIZE),
                 nn.LeakyReLU(),
                 nn.Dropout(),
                 nn.Linear(NNet_SIZE, NNet_SIZE),
@@ -96,7 +115,7 @@ class SiameseNetwork(nn.Module):
     def forward_once(self, x):
         if self.model_type == 'rnn':
             # rnn模型有额外的输入
-            lstm_out, (h_n, h_c) = self.coding_model(x)
+            lstm_out, h_n_c, = self.coding_model(x)
             x = lstm_out[:, -1, :]
         else:  # cnn的情况
             x = self.coding_model(x)

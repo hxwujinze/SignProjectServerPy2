@@ -1,0 +1,35 @@
+data_size:10728
+batch_size:64
+diff info 
+    diff max: 5.128901 min: 2.009248, mean: 2.940356 var: 0.578791
+     same max: 0.186340 min: 0.001607, mean: 0.008217, same_var 0.000220
+loss: 0.000078
+Epoch: 800
+learning rate 0.000074
+weight_decay 0.000002
+SiameseNetwork(
+  (coding_model): Sequential(
+    (0): Conv1d(14, 32, kernel_size=(3,), stride=(1,), padding=(1,))
+    (1): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True)
+    (2): LeakyReLU(0.01)
+    (3): Conv1d(32, 32, kernel_size=(3,), stride=(1,), padding=(1,))
+    (4): BatchNorm1d(32, eps=1e-05, momentum=0.1, affine=True)
+    (5): LeakyReLU(0.01)
+    (6): MaxPool1d(kernel_size=3, stride=3, padding=0, dilation=1, ceil_mode=False)
+    (7): Conv1d(32, 64, kernel_size=(3,), stride=(1,), padding=(1,))
+    (8): BatchNorm1d(64, eps=1e-05, momentum=0.1, affine=True)
+    (9): LeakyReLU(0.01)
+    (10): Conv1d(64, 64, kernel_size=(3,), stride=(1,), padding=(1,))
+    (11): BatchNorm1d(64, eps=1e-05, momentum=0.1, affine=True)
+    (12): LeakyReLU(0.01)
+  )
+  (out): Sequential(
+    (0): Linear(in_features=1344, out_features=1024, bias=True)
+    (1): Dropout(p=0.5)
+    (2): LeakyReLU(0.01)
+    (3): Linear(in_features=1024, out_features=1024, bias=True)
+    (4): Dropout(p=0.5)
+    (5): LeakyReLU(0.01)
+    (6): Linear(in_features=1024, out_features=256, bias=True)
+  )
+)

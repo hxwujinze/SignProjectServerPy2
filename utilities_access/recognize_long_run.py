@@ -13,7 +13,7 @@ from torch.autograd import Variable
 
 import my_pickle
 from algorithm_models.CNN_model import CNN, get_max_index
-from algorithm_models.RNN_model import LSTM
+from algorithm_models.RNN_model import RNN
 from algorithm_models.verify_model import SiameseNetwork
 
 CURR_WORK_DIR = os.path.dirname(__file__)
@@ -117,6 +117,10 @@ class VerifyModel:
         self.verify_model.double()
         self.verify_model.eval()
         self.verify_model.cpu()
+        if model_type == 'rnn':
+            self.threshold = 0.30
+        else:
+            self.threshold = 0.12
 
         vector_file_path = os.path.join(CURR_DATA_DIR, 'reference_verify_vector_%s' % model_type)
         file_ = open(vector_file_path, 'rb')
@@ -132,7 +136,7 @@ class VerifyModel:
         reference_vector = Variable(torch.from_numpy(reference_vector).double())
         diff = F.pairwise_distance(data_vector, reference_vector)
         diff = torch.squeeze(diff).data[0]
-        if diff > 0.3:
+        if diff > self.threshold:
             return False, diff
         else:
             return True, diff
@@ -155,7 +159,7 @@ def generate_offline_recognize_result(tensor):
     max_res = torch.max(tensor, dim=1)
     max_value = max_res[0].data.float()[0][0]
     raw_index = max_res[1].data.int()[0][0]
-    if max_value < 0.20:
+    if max_value < 0.15:
         index = 13
     else:
         index = raw_index
@@ -219,7 +223,7 @@ def main():
 
 
 if __name__ == '__main__':
-    offline_rnn_model = LSTM()
+    offline_rnn_model = RNN()
     offline_rnn_model = load_model_param(offline_rnn_model, 'rnn_model')
     offline_verify_model = VerifyModel('rnn')
     main()

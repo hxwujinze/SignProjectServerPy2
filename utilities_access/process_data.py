@@ -83,12 +83,13 @@ def feature_extract(data_set, type_name):
 
 def feature_extract_single_polyfit(data, compress):
     seg_poly_fit = None
+    window_range = 16
     start_ptr = 0
-    end_ptr = 16
+    end_ptr = window_range
     while end_ptr <= len(data):
         window_data = data[start_ptr:end_ptr, :]
         window_extract_data = None
-        x = np.arange(0, 16, 1)
+        x = np.arange(0, window_range, 1)
         y = window_data
         # 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
         # 0   2   4   6   8   10    11    14
@@ -96,7 +97,7 @@ def feature_extract_single_polyfit(data, compress):
         for each_channel in range(3):
             dots_in_channel = None
             window_poly = np.poly1d(poly_args[:, each_channel])
-            for dot in np.arange(0, 16, compress):
+            for dot in np.arange(0, window_range, compress):
                 # assemble each dot's each channel
                 if dots_in_channel is None:
                     dots_in_channel = window_poly(dot)
@@ -113,8 +114,8 @@ def feature_extract_single_polyfit(data, compress):
             seg_poly_fit = window_extract_data
         else:
             seg_poly_fit = np.vstack((seg_poly_fit, window_extract_data))
-        start_ptr += 16
-        end_ptr += 16
+        start_ptr += window_range
+        end_ptr += window_range
 
     return seg_poly_fit
 
@@ -221,16 +222,24 @@ def __emg_feature_extract(data_set, for_cnn):
 
 def wavelet_trans(data):
     data = np.array(data).T  # 转换为 通道 - 时序
-    data = pywt.threshold(data, 18, 'hard')  # 阈值滤波
-    try:
-        data = pywt.wavedec(data, wavelet='db3', level=5)  # 小波变换
-    except ValueError:
+    data = pywt.threshold(data, 30, 'hard')  # 阈值滤波
+    if len(data[0]) == 160:
+
         data = pywt.wavedec(data, wavelet='db2', level=5)
-    data = np.vstack((data[0].T, np.zeros(8))).T
+        data = np.vstack((data[0].T, np.zeros(8)))
+        data = np.vstack((np.zeros(8), data))
+        data = np.vstack((np.zeros(8), data))
+        # 小波变换
+    else:
+        data = pywt.wavedec(data, wavelet='db3', level=3)
+        data = data[0]
+        data = pywt.wavedec(data, wavelet='db2', level=2)[0]
+        data = np.vstack((np.zeros(8), data.T))
+
     # 转换为 时序-通道 追加一个零点在转换回 通道-时序
-    data = pywt.threshold(data, 12, 'hard')  # 再次阈值滤波
-    data = data.T
-    data = normalize(data, 1, 100)
+    data = pywt.threshold(data, 15, 'hard')  # 再次阈值滤波
+    normalize_scaler.fit(data)
+    data = normalize_scaler.transform(data)
     data = eliminate_zero_shift(data)  # 消除零点漂移
     data = np.abs(data)  # 反转
     return data  # 转换为 时序-通道 便于rnn输入
@@ -275,7 +284,7 @@ def expand_emg_data(data):
 def expand_emg_data_single(data):
     expanded_data = None
     for each_dot in range(len(data)):
-        if each_dot % 2 != 0:
+        if each_dot % 2 == 0:
             continue  # 只对偶数点进行左右扩展
         if each_dot - 1 < 0:
             left_val = data[each_dot]
@@ -364,7 +373,7 @@ class DataScaler:
             self.scale_datas = pickle.load(file_)
             file_.close()
             print("curr scalers' type: \n\"%s\"" % str(self.scale_datas.keys()))
-        except IOError:
+        except FileNotFoundError:
             print("cant load scale data, please generated before use")
             return
 
@@ -469,3 +478,4 @@ def scale_adjust(threshold, default_scale):
             # 当最大最小值不满足一般数据规律时 设置为默认归一化的scale
             curr_min[each_val] = curr_min[each_val] * default_scale / curr_scale[each_val]
             curr_scale[each_val] = default_scale
+
