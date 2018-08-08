@@ -334,7 +334,7 @@ class ListenerThread(threading.Thread):
         while not self.outer_event.is_set():
             # 不阻塞 1s查看一次状态
             try:
-                self.listened_socket.settimeout(0.2)
+                self.listened_socket.settimeout(0.1)
                 get = self.listened_socket.recv(128)
                 if get != b'':
                     print("receive text %s" % get)

@@ -13,7 +13,6 @@ from torch.autograd import Variable
 
 import my_pickle
 from algorithm_models.CNN_model import CNN, get_max_index
-from algorithm_models.RNN_model import RNN
 from algorithm_models.verify_model import SiameseNetwork
 
 CURR_WORK_DIR = os.path.dirname(__file__)
@@ -39,8 +38,8 @@ class OnlineRecognizer(threading.Thread):
         self.verify_model = VerifyModel('cnn')
 
         self.recognize_data_history = []
-        self.is_redundant = False
-        self.is_women = False
+        self.skip_cnt = 0
+
         # 重复标记 可能有多个有效的识别挨在一起
         # 只要有一个有效识别剩下几个有效的都可以跳过
         # 直到遇到一个无效的被重新置位
@@ -51,6 +50,9 @@ class OnlineRecognizer(threading.Thread):
             while not self.data_queue.empty():
                 # 转换为Variable
                 new_msg = self.data_queue.get()
+                if self.skip_cnt != 0:
+                    self.skip_cnt -= 1
+                    continue
                 data_mat = np.array([new_msg.T])
                 data_mat = torch.from_numpy(data_mat).double()
                 data_mat = Variable(data_mat)
@@ -66,25 +68,16 @@ class OnlineRecognizer(threading.Thread):
                 }
                 # return all
                 # print(json.dumps(return_info))
+
                 if verify_result:
-                    if predict_index == 13:
-                        continue
-                    if not self.is_redundant:
-
-                        if predict_index == 16:
-                            self.is_women = True
-                        else:
-                            if predict_index != 14:
-                                self.is_women = False
-                            if self.is_women and predict_index == 14:
-                                continue
-                        self.is_redundant = True
+                    if predict_index != 13:
                         print(json.dumps(return_info))
-                else:
-                    self.is_redundant = False
+                    self.skip_cnt = 6
 
-                return_info['data'] = new_msg
-                self.recognize_data_history.append(return_info)
+                # return_info['data'] = new_msg
+                # self.recognize_data_history.append(return_info)
+
+        print("online recognizer stop")
 
     def add_new_data(self, data):
         self.data_queue.put(data)
@@ -94,7 +87,7 @@ class OnlineRecognizer(threading.Thread):
 
     def save_history_recognized_data(self):
         # 保存历史数据
-        time_tag = time.strftime("%H_%M_%S", time.localtime(time.time()))
+        time_tag = time.strftime("%m-%d %H_%M", time.localtime(time.time()))
         file_name = os.path.join(CURR_DATA_DIR, 'history_recognized_data_' + time_tag)
         file_ = open(file_name, 'wb')
         pickle.dump(self.recognize_data_history, file_)
@@ -117,10 +110,7 @@ class VerifyModel:
         self.verify_model.double()
         self.verify_model.eval()
         self.verify_model.cpu()
-        if model_type == 'rnn':
-            self.threshold = 0.30
-        else:
-            self.threshold = 0.12
+        self.threshold = 0.1
 
         vector_file_path = os.path.join(CURR_DATA_DIR, 'reference_verify_vector_%s' % model_type)
         file_ = open(vector_file_path, 'rb')
@@ -176,8 +166,6 @@ def generate_offline_recognize_result(tensor):
 
 def main():
     # load model
-    read_ = input()
-    mode = read_
     stop_event = threading.Event()
     online_recognizer = OnlineRecognizer(stop_event)
     online_recognizer.start()
@@ -187,43 +175,11 @@ def main():
         if read_ == 'end':
             if online_recognizer is not None:
                 online_recognizer.stop_thread()
-            print("")
-            break
-        if read_.endswith('line'):
-            mode = read_
-            if mode == 'offline':
-                online_recognizer.clean_data_queue()
-                print('clean stab')  # 用于清空上次在线识别阻塞住的readline
-            continue
-        if mode == 'offline':
-            # offline mode 会带有一个用于验证的data mat 使用 | 分割
-            data_mats = read_
-            data_mat = my_pickle.loads(data_mats)
-            data_mat = torch.from_numpy(np.array([data_mat])).float()
-            verify_data_mat = data_mat.double()
-            verify_data_mat = Variable(verify_data_mat)
-            data_mat = Variable(data_mat)
-            # numpy -> Variable
-            output = offline_rnn_model(data_mat)
-            res = generate_offline_recognize_result(output)
-            correctness, diff = offline_verify_model.verify_correctness(verify_data_mat, res['index'])
-            if diff < 0.5:
-                correctness = True
-            if not correctness:
-                res['index'] = 13
-
-            res['verify_result'] = str(correctness)
-            res['diff'] = diff
-            res = json.dumps(res)
-            print(res)
-
-        else:
-            data_mat = my_pickle.loads(read_)
-            online_recognizer.add_new_data(data_mat)
+            print("end")
+            return
+        data_mat = my_pickle.loads(read_)
+        online_recognizer.add_new_data(data_mat)
 
 
 if __name__ == '__main__':
-    offline_rnn_model = RNN()
-    offline_rnn_model = load_model_param(offline_rnn_model, 'rnn_model')
-    offline_verify_model = VerifyModel('rnn')
     main()

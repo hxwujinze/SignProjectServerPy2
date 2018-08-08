@@ -1,3 +1,4 @@
+# coding:utf-8
 import torch
 import torch.nn as nn
 
@@ -12,7 +13,7 @@ class CNN(nn.Module):
 
         # input 14 x 64
         self.conv1 = nn.Sequential(
-            # 使用VGGNet架构卷积
+            # VGGNet
             nn.Conv1d(
                 in_channels=14,
                 out_channels=32,
