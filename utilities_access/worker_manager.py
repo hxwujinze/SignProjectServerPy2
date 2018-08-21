@@ -135,6 +135,7 @@ class MainWorkerThread(threading.Thread):
                                                  armbands_tags,
                                                  self.recognize_event,
                                                  self.recognize_mode)
+        self.recognize_process.daemon = True
         self.recognize_process.start()
         # 进入工作线程的主循环 扫描消息队列
         self.standby_loop()

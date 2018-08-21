@@ -43,9 +43,15 @@ PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
 # CLF = joblib.load(CURR_DATA_DIR + "\\train_model.m")
 
 
-GESTURES_TABLE = [u'肉 ', u'鸡蛋 ', u'喜欢 ', u'您好 ', u'你 ', u'什么 ', u'想 ', u'我 ', u'很 ', u'吃 ',  # 0-9
-                  u'老师 ', u'发烧 ', u'谢谢 ', u'', u'大家 ', u'支持 ', u'我们 ', u'创新 ', u'医生 ', u'交流 ',  # 10 - 19
-                  u'团队 ', u'帮助 ', u'聋哑人 ', u'请 ']  # 20 - 23
+GESTURES_TABLE = [u'朋友 ', u'下午 ', u'天 ', u'早上 ', u'上午 ', u'中午 ', u'谢谢 ', u'对不起 ', u'没关系 ', u'昨天 ', u'今天 ',
+                  u'明天 ', u'家 ', u'回 ', u'去 ', u'迟到 ', u'交流 ', u'联系 ', u'你 ', u'什么 ', u'想 ', u'我 ', u'机场 ', u'晚上 ',
+                  u'卫生间 ', u'退 ', u'机票 ', u'着急 ', u'怎么 ', u'办 ', u'行李 ', u'可以 ', u'托运 ', u'起飞 ', u'时间 ', u'错过 ',
+                  u'改签 ', u'航班 ', u'延期 ', u'请问 ', u'怎么走 ', u'在哪里 ', u'找 ', u'不到 ', u'没收 ', u'为什么 ', u'航站楼 ',
+                  u'取票口 ', u'检票口 ', u'身份证 ', u'手表 ', u'钥匙 ', u'香烟 ', u'刀 ', u'打火机 ', u'沈阳 ', u'大家 ',
+                  u'支持 ', u'我们 ', u'医生 ', u'帮助 ', u'聋哑人 ', u'', u'充电 ', u'寄存 ', u'中国 ', u'辽宁 ', u'北京 ',
+                  u'世界 ']
+
+
 queue_lock = multiprocessing.Lock()
 data_scaler = process_data.DataScaler(CURR_DATA_DIR)
 
@@ -268,7 +274,7 @@ class OnlineRecognizer:
             self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
-        self.step_win_end = random.randint(8, 20)
+        self.step_win_end = random.randint(12, 24)
         # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
         self.step_win_start = 0
         self.data_buffer = ([], [], [])
@@ -413,14 +419,18 @@ class ResultReceiver(threading.Thread):
                 res = json.loads(res)
             except ValueError:
                 # 取出上次加入阻塞在pipe里的内容
-                print ("receiver stop working ")
-                return
+                print (res)
+                if res == 'end':
+                    print ("receiver stop working ")
+                    return
+                else:
+                    continue
             time_tag = self.timer_q.get()
             end_time = time.clock()
             cost_time = end_time - time_tag
             print('**************************************')
             print('online recognize result:')
-            print('diff: %s' % res['diff'])
+            print('diff: %s' % str(res['diff']))
             print('index: %d' % res['index'])
             print('verify_result: %s' % res['verify_result'])
             print('**************************************')
@@ -453,6 +463,7 @@ class ErrorOutputListener(threading.Thread):
     def run(self):
         while not self.stop_flag.is_set():
             err_info = self.pipe.readlines()
+            time.sleep(0.001)
             if len(err_info) != 0:
                 print('rnn subprocess error info:')
                 for each_line in err_info:
@@ -480,7 +491,8 @@ def generate_recognize_subprocces():
                             stdin=PIPE,
                             stderr=PIPE,
                             stdout=PIPE,
-                            universal_newlines=True)
+                            universal_newlines=True, )
+
     pipe_input = rnn_sub_process.stdin
     pipe_output = rnn_sub_process.stdout
     pipe_err = rnn_sub_process.stderr
