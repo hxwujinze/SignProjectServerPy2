@@ -1,4 +1,5 @@
 data/*
 !data/well_model
 db.sqlite3
-
+*.rar
+*.pyc

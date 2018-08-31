@@ -106,11 +106,11 @@ class VerifyModel:
 
     def __init__(self):
         self.verify_model = SiameseNetwork(train=False)  # verify model
-        load_model_param(self.verify_model, 'verify_model')
+        load_model_param(self.verify_model, 'verify')
         self.verify_model.double()
         self.verify_model.eval()
         self.verify_model.cpu()
-        self.threshold = 0.7
+        self.threshold = 0.3
 
         vector_file_path = os.path.join(CURR_DATA_DIR, 'reference_verify_vector')
         file_ = open(vector_file_path, 'rb')
@@ -142,7 +142,8 @@ def load_model_param(model, model_name):
         for file_ in files:
             file_name_split = os.path.splitext(file_)
             if file_name_split[1] == '.pkl' and file_name_split[0].startswith(model_name):
-                file_ = CURR_DATA_DIR + '\\' + file_
+                print('load model params %s' % file_name_split[0])
+                file_ = os.path.join(CURR_DATA_DIR, file_)
                 model.load_state_dict(torch.load(file_))
                 model.eval()
                 return model

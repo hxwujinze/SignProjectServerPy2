@@ -274,7 +274,7 @@ class OnlineRecognizer:
             self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
-        self.step_win_end = random.randint(12, 24)
+        self.step_win_end = random.randint(14, 24)
         # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
         self.step_win_start = 0
         self.data_buffer = ([], [], [])
@@ -419,7 +419,7 @@ class ResultReceiver(threading.Thread):
                 res = json.loads(res)
             except ValueError:
                 # 取出上次加入阻塞在pipe里的内容
-                print (res)
+                # print (res)
                 if res == 'end':
                     print ("receiver stop working ")
                     return
