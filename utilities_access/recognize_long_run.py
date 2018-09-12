@@ -18,6 +18,8 @@ from algorithm_models.verify_model import SiameseNetwork
 CURR_WORK_DIR = os.path.dirname(__file__)
 CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_param')
 
+torch.set_num_threads(1)
+
 class OnlineRecognizer(threading.Thread):
     """
     在线识别线程
@@ -28,7 +30,7 @@ class OnlineRecognizer(threading.Thread):
         self.data_queue = queue.Queue()
         # 存放已经处理好的numpy对象 供模型识别
         self.stop_flag = stop_flag
-
+        torch.set_num_threads(1)
         self.cnn_model = CNN()  # classify model
         self.cnn_model.load_params(CURR_DATA_DIR)
         self.cnn_model.double()
@@ -46,7 +48,7 @@ class OnlineRecognizer(threading.Thread):
 
     def run(self):
         while not self.stop_flag.is_set():
-            time.sleep(0.01)
+            time.sleep(0.001)
             while not self.data_queue.empty():
                 # 转换为Variable
                 new_msg = self.data_queue.get()
@@ -72,7 +74,7 @@ class OnlineRecognizer(threading.Thread):
                 if verify_result:
                     if predict_index != 62:
                         print(json.dumps(return_info))
-                    self.skip_cnt = 7
+                    self.skip_cnt = 6
 
                 # return_info['data'] = new_msg
                 # self.recognize_data_history.append(return_info)
@@ -110,7 +112,7 @@ class VerifyModel:
         self.verify_model.double()
         self.verify_model.eval()
         self.verify_model.cpu()
-        self.threshold = 0.3
+        self.threshold = 0.15
 
         vector_file_path = os.path.join(CURR_DATA_DIR, 'reference_verify_vector')
         file_ = open(vector_file_path, 'rb')

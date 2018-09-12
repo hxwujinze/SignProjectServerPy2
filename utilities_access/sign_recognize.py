@@ -36,7 +36,7 @@ CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_param')
 
 # 这里键入python3路径 for pytroch运行
 # PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
-PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
+PYTORCH_INTP_PATH = 'D:\\Anaconda3-torch04\\python.exe'
 
 
 # 这里将模型装载进来
@@ -203,6 +203,7 @@ class RecognizeWorker(multiprocessing.Process):
                 if self.recognize_status.is_set():
                     self.online_recognizer.append_data(acc_data, gyr_data, emg_data)
                 cap_start_time = time.clock()
+                time.sleep(0.005)
 
         # debug 结束一次采集后  将历史数据保存起来
         # self.online_recognizer.data_processor.store_raw_history_data()
@@ -274,7 +275,7 @@ class OnlineRecognizer:
             self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
-        self.step_win_end = random.randint(14, 24)
+        self.step_win_end = random.randint(9, 20)
         # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
         self.step_win_start = 0
         self.data_buffer = ([], [], [])
@@ -311,7 +312,7 @@ class DataProcessor(threading.Thread):
 
     def run(self):
         while not self.stop_flag.isSet():
-            time.sleep(0.08)
+            time.sleep(0.01)
             while not self.new_data_queue.empty():
                 self.append_raw_data()
                 if self.end_ptr >= self.extract_ptr_end:
