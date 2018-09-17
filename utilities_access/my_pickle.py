@@ -35,7 +35,6 @@ def dumps(array):
         for col in row:
             res += str(col) + ','
         res = '%s;' % res
-
     return res
 
 if __name__ == '__main__':

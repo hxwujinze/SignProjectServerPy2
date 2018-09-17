@@ -36,7 +36,7 @@ CURR_DATA_DIR = os.path.join(CURR_WORK_DIR, 'models_param')
 
 # 这里键入python3路径 for pytroch运行
 # PYTORCH_INTP_PATH = 'C:\\Users\\Scarecrow\\AppData\\Local\\Programs\\Python\\Python36\\python.exe'
-PYTORCH_INTP_PATH = 'D:\\Anaconda3-torch04\\python.exe'
+PYTORCH_INTP_PATH = 'D:\\Anaconda3\\python.exe'
 
 
 # 这里将模型装载进来
@@ -203,7 +203,9 @@ class RecognizeWorker(multiprocessing.Process):
                 if self.recognize_status.is_set():
                     self.online_recognizer.append_data(acc_data, gyr_data, emg_data)
                 cap_start_time = time.clock()
-                time.sleep(0.005)
+                time.sleep(0.0086)
+                # it's necessary that give every sufficient thread sleep
+                # if it doesn't need to work
 
         # debug 结束一次采集后  将历史数据保存起来
         # self.online_recognizer.data_processor.store_raw_history_data()
@@ -364,8 +366,8 @@ class DataProcessor(threading.Thread):
                                                            gyr_data=gyr_data,
                                                            emg_data=emg_data)
         data_mat = data_scaler.normalize(data_mat, 'cnn')
-        data_mat = np.where(data_mat > 0.00000000001, data_mat, 0)
-        return data_mat
+        data_mat = np.where(data_mat > 0.0000000001, data_mat, 0)
+        return np.array(data_mat)
 
     def _send_to_recognize_process(self, data_mat):
         data_pickle_str = my_pickle.dumps(data_mat)

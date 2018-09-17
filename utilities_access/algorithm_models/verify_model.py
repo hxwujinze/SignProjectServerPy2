@@ -1,18 +1,23 @@
 # Siamese-Networks
+import math
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# from .make_resnet import my_resnet
+from .make_VGG import make_vgg
+
 # CNN: input len -> output len
 # Lout=floor((Lin+2∗padding−dilation∗(kernel_size−1)−1)/stride+1)
 
 
 WEIGHT_DECAY = 0.000002
-BATCH_SIZE = 256
-LEARNING_RATE = 0.00001
-EPOCH = 200
+BATCH_SIZE = 64
+LEARNING_RATE = 0.0003
+EPOCH = 250
+
 
 class SiameseNetwork(nn.Module):
     def __init__(self, train=True):
@@ -27,82 +32,35 @@ class SiameseNetwork(nn.Module):
         else:
             self.status = 'eval'
 
+        # self.coding_model = my_resnet(layers=[2 ,2], layer_planes=[64, 128])
+        # self.coding_model = load_model_from_classify()
+        self.coding_model = make_vgg(input_chnl=14, layers=[2, 3], layers_chnl=[64, 128])
 
-        self.coding_model = nn.Sequential(
-            nn.Conv1d(  # 14 x 64
-                in_channels=14,
-                out_channels=64,
-                kernel_size=3,
-                padding=1,
-                stride=1,
-            ),  # 32 x 64
-            # 通常插入在激活函数和FC层之间 对神经网络的中间参数进行normalization
-            nn.BatchNorm1d(64),  # 32 x 64
+        self.out = torch.nn.Sequential(
             nn.LeakyReLU(),
-
-            nn.Conv1d(  # 14 x 64
-                in_channels=64,
-                out_channels=64,
-                kernel_size=3,
-                padding=1,
-                stride=1,
-            ),  # 32 x 64
-            # 通常插入在激活函数和FC层之间 对神经网络的中间参数进行normalization
-            nn.BatchNorm1d(64),  # 32 x 64
+            nn.Linear(256, 128),
             nn.LeakyReLU(),
-            # only one pooling
-            nn.MaxPool1d(kernel_size=3, stride=2),  # 32 x 21
-
-            nn.Conv1d(
-                in_channels=64,
-                out_channels=128,
-                kernel_size=3,
-                padding=1,
-                stride=1
-            ),  # 40 x 21
-            nn.BatchNorm1d(128),  # 40 x 21
-            nn.LeakyReLU(),
-
-            nn.Conv1d(
-                in_channels=128,
-                out_channels=128,
-                kernel_size=3,
-                padding=1,
-                stride=1
-            ),  # 40 x 21
-            nn.BatchNorm1d(128),  # 40 x 21
-
-            nn.Conv1d(
-                in_channels=128,
-                out_channels=128,
-                kernel_size=3,
-                padding=1,
-                stride=1
-            ),  # 40 x 21
-            nn.BatchNorm1d(128),  # 40 x 21
-            nn.LeakyReLU(),
-
-            nn.MaxPool1d(kernel_size=3, stride=2)
-
-        )
-        # todo output dim is too many  256 may enough
-        self.out = nn.Sequential(
-            nn.Dropout(),
-            nn.LeakyReLU(),
-            nn.Linear(1920, 1024),
-            nn.Dropout(),
-            nn.LeakyReLU(),
-            nn.Linear(1024, 1024),
-            nn.Dropout(),
-            nn.LeakyReLU(),
-
-            nn.Linear(1024, 512),
+            nn.Linear(128, 128),
         )
 
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                n = m.kernel_size[0] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.BatchNorm1d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.weight.data.normal_(0, 0.01)
+                m.bias.data.zero_()
 
     def forward_once(self, x):
         x = self.coding_model(x)
-        x = x.view(x.size(0), -1)
         out = self.out(x)
         return out
 
@@ -118,11 +76,20 @@ class SiameseNetwork(nn.Module):
         else:
             return self.forward_once(xs[0])
 
+    def train(self, mode=True):
+        nn.Module.train(self, mode)
+        self.status = 'train'
+
+    def single_output(self):
+        self.status = 'eval'
+
     def exc_train(self):
         # only import train staff in training env
         from train_util.data_set import generate_data_set, SiameseNetworkTrainDataSet
         from train_util.common_train import train
         from torch.utils.data import dataloader as DataLoader
+        print("verify model start training")
+        print(str(self))
 
         optimizer = torch.optim.Adam(self.parameters(), lr=LEARNING_RATE)
         loss_func = ContrastiveLoss()
@@ -143,14 +110,14 @@ class SiameseNetwork(nn.Module):
               optimizer=optimizer,
               exp_lr_scheduler=lr_scheduler,
               loss_func=loss_func,
-              save_dir='.',
+              save_dir='./params',
               data_set=data_set,
               data_loader=data_loader,
               test_result_output_func=test_result_output,
               cuda_mode=1,
               print_inter=2,
-              val_inter=20,
-              scheduler_step_inter=30
+              val_inter=25,
+              scheduler_step_inter=50
               )
 
 
@@ -174,20 +141,28 @@ def test_result_output(result_list, epoch, loss):
     diff_min = np.min(diff_arg)
     diff_max = np.max(diff_arg)
     diff_var = np.var(diff_arg)
+    diff_1st = np.percentile(diff_arg, 10)
+    diff_med = np.percentile(diff_arg, 50)
+    diff_2nd = np.percentile(diff_arg, 90)
 
     same_max = np.max(same_arg)
     same_min = np.min(same_arg)
     same_var = np.var(same_arg)
+    same_1st = np.percentile(same_arg, 10)
+    same_med = np.percentile(same_arg, 50)
+    same_2nd = np.percentile(same_arg, 90)
 
     same_arg = np.mean(same_arg, axis=-1)
     diff_arg = np.mean(diff_arg, axis=-1)
     diff_res = "****************************"
-    diff_res += "epoch: %s\nloss: %s\nprogress: %.2f lr: %f" % \
+    diff_res += "epoch: %s\nloss: %s\nprogress: %.2f lr: %f\n" % \
                 (epoch, loss, 100 * epoch / EPOCH, LEARNING_RATE)
-    diff_res += "diff info \n    diff max: %f min: %f, mean: %f var: %f\n " % \
-                (diff_max, diff_min, diff_arg, diff_var) + \
-                "    same max: %f min: %f, mean: %f, same_var %f" % \
-                (same_max, same_min, same_arg, same_var)
+    diff_res += "diff info \n    max: %f min: %f, mean: %f var: %f\n " % \
+                (diff_max, diff_min, diff_arg, diff_var) \
+                + "    1st: %f med: %f 2nd: %f\n" % (diff_1st, diff_med, diff_2nd) \
+                + "same info\n    max: %f min: %f, mean: %f, same_var %f\n" % \
+                (same_max, same_min, same_arg, same_var) \
+                + "    1st: %f med: %f 2nd: %f" % (same_1st, same_med, same_2nd)
     print(diff_res)
     return diff_res
 

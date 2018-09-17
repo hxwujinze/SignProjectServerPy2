@@ -36,13 +36,13 @@ class MyoFeedback(myo.Feed):
 
     def on_arm_sync(self, myo, timestamp, arm, x_direction, rotation,
                     warmup_state):
-        print("armband sync 0x{0:x}".format(myo.value))
+        # print("armband sync 0x{0:x}".format(myo.value))
         update_connected_list()
         armband_id = armband_id_assign_book[myo.value]
         armband_id_obj_map[armband_id].is_sync = True
 
     def on_arm_unsync(self, myo, timestamp):
-        print("armband unsync 0x{0:x}".format(myo.value))
+        # print("armband unsync 0x{0:x}".format(myo.value))
         update_connected_list()
         armband_id = armband_id_assign_book[myo.value]
         armband_id_obj_map[armband_id].is_sync = False
@@ -116,9 +116,9 @@ def update_connected_list():
         connect_time_obj_map[time_tag] = each_armband
 
     lock.release()
-    print("curr armbands list :")
-    for each in armbands_connected:
-        print(str(each) + '\n')
+    # print("curr armbands list :")
+    # for each in armbands_connected:
+    #     print(str(each) + '\n')
 
 """
 占用手环
