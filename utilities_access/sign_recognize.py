@@ -434,6 +434,7 @@ class ResultReceiver(threading.Thread):
             print('**************************************')
             print('online recognize result:')
             print('diff: %s' % str(res['diff']))
+            print('threshold: %s' % str(res['threshold']))
             print('index: %d' % res['index'])
             print('verify_result: %s' % res['verify_result'])
             print('**************************************')

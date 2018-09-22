@@ -1,4 +1,9 @@
 # coding:utf-8
+"""
+用于对输入数据进行特征提取的库函数文件
+
+"""
+
 
 import os
 import pickle
@@ -22,64 +27,6 @@ TYPE_LEN = {
 
 # data process func for online
 
-def feature_extract(data_set, type_name):
-    """
-    特征提取 并进行必要的归一化
-
-    acc gyr数据的三种特征量纲相差不大 且有某些维度全局的值都很相近的情况
-    于是暂时去除归一化的操作 拟对只对数据变化较大，且变化范围较大于1的数据维度进行部分归一化
-
-    emg数据照常进行各种处理
-
-    :param data_set: 来自Load_From_File过程的返回值 一个dict
-                     包含一个手语 三种采集数据类型的 多次采集过程的数据
-    :param type_name: 数据采集的类型 决定nparray的长度
-    :return: 一个dict 包含这个数据采集类型的原始数据,3种特征提取后的数据,特征拼接后的特征向量
-            仍保持多次采集的数据的np.array放在一个list中
-            返回的数据的dict包含所有的数据 但是只有有效的字段有数据
-    """
-    global normalize_scale_collect
-    normalize_scale_collect = []
-    global standardize_scale_collect
-    standardize_scale_collect = []
-
-    data_set_rms_feat = []
-    data_set_zc_feat = []
-    data_set_arc_feat = []
-    data_set_polyfit_feat = []  # for cnn 使用多项式对间隔间的数据进行拟合 减少中间数据点
-    data_set_appended_feat = []
-
-    data_set = data_set[type_name]
-    for raw_data in data_set:
-        # 一般的特征提取过程
-        # rms zc arc polyfit all
-        seg_RMS_feat, seg_ZC_feat, seg_ARC_feat, seg_polyfit_data, seg_all_feat \
-            = feature_extract_single(raw_data, type_name)
-        # rnn sector
-        data_set_arc_feat.append(seg_ARC_feat)
-        data_set_rms_feat.append(seg_RMS_feat)
-        data_set_zc_feat.append(seg_ZC_feat)
-        data_set_appended_feat.append(seg_all_feat)
-
-        # cnn sector
-        # cnn的特征提取过程 只使用曲线拟合特征
-        seg_polyfit_feat = feature_extract_single_polyfit(raw_data, 2)
-        # 多项式拟合后切割
-        seg_polyfit_feat = seg_polyfit_feat[8:-8, :]
-        # 给CNN喂128的片段短数据  拟合压缩前是
-        data_set_polyfit_feat.append(seg_polyfit_feat)
-
-
-    return {
-        'type_name': type_name,
-        'raw': data_set,
-        'arc': data_set_arc_feat,
-        'rms': data_set_rms_feat,
-        'zc': data_set_zc_feat,
-
-        'poly_fit': data_set_polyfit_feat,  # cnn 3 x 64 数据
-        'append_all': data_set_appended_feat  # rnn 11 x 10 数据
-    }
 
 def feature_extract_single_polyfit(data, compress):
     seg_poly_fit = None
@@ -119,64 +66,8 @@ def feature_extract_single_polyfit(data, compress):
 
     return seg_poly_fit
 
-def feature_extract_single(polyfit_data, type_name):
-    # 对曲线拟合后的数据进行特征提取 效果更好
-    polyfit_data = feature_extract_single_polyfit(polyfit_data, 1)
-    window_amount = len(polyfit_data) / WINDOW_SIZE
-    windows_data = np.vsplit(polyfit_data, window_amount)
-    win_index = 0
-    seg_ARC_feat = None
-    seg_RMS_feat = None
-    seg_ZC_feat = None
 
-    features = [seg_RMS_feat, seg_ZC_feat, seg_ARC_feat, ]
-    for Win_Data in windows_data:
-        # 依次处理每个window的数据
-        win_RMS_feat = np.sqrt(np.mean(np.square(Win_Data), axis=0))
-        Win_Data1 = np.vstack((Win_Data[1:, :], np.zeros((1, TYPE_LEN[type_name]))))
-        win_ZC_feat = np.sum(np.sign(-np.sign(Win_Data) * np.sign(Win_Data1) + 1), axis=0) - 1
-        win_ARC_feat = np.apply_along_axis(ARC, 0, Win_Data)
-        # arc 只要后面几个系数的数据
-        win_ARC_feat = win_ARC_feat.ravel()[-5:, ]
-        # 将每个window特征提取的数据用vstack叠起来
-        win_index += 1
 
-        each_feat_type_data = (win_RMS_feat, win_ZC_feat, win_ARC_feat)
-        for each in range(len(each_feat_type_data)):
-            if features[each] is None:
-                features[each] = each_feat_type_data[each]
-            else:
-                features[each] = np.vstack((features[each], each_feat_type_data[each]))
-
-    seg_all_feat = np.hstack(tuple(features))
-    features.append(polyfit_data)
-    features.append(seg_all_feat)
-    # rms zc arc polyfit all
-    return tuple(features)
-
-def ARC(Win_Data):
-    Len_Data = len(Win_Data)
-    # AR_coefficient = []
-    AR_coefficient = np.polyfit(range(Len_Data), Win_Data, 3)
-    return AR_coefficient
-
-def append_feature_vector(data_set):
-    """
-    拼接三种数据采集类型的特征数据成一个大向量
-    :param data_set: 第一维存储三种采集类型数据集的list
-                     第二维是这个类型数据三种特征拼接后 每次采集获得的数据矩阵
-    :return:
-    """
-
-    batch_list = []
-    # 每种采集类型下有多个数据
-    for i in range(len(data_set[0])):
-        # 取出每个采集类型的数据列中的每个数据进行拼接
-        batch_mat = append_single_data_feature(acc_data=data_set[0][i],
-                                               gyr_data=data_set[1][i],
-                                               emg_data=data_set[2][i], )
-        batch_list.append(batch_mat)
-    return batch_list
 
 def append_single_data_feature(acc_data, gyr_data, emg_data):
     batch_mat = np.zeros(len(acc_data))
@@ -194,32 +85,6 @@ def append_single_data_feature(acc_data, gyr_data, emg_data):
     return batch_mat
 
 # emg data_process
-def emg_feature_extract(data_set, for_cnn):
-    return __emg_feature_extract(data_set, for_cnn)
-
-def __emg_feature_extract(data_set, for_cnn):
-    """
-    特征提取
-    :param data_set: 来自Load_From_File过程的返回值 一个dict
-                     包含一个手语 三种采集数据类型的 多次采集过程的数据
-    :return: 一个dict 包含这个数据采集类型的原始数据,3种特征提取后的数据,特征拼接后的特征向量
-            仍保持多次采集的数据放在一起
-    """
-    if for_cnn:
-        data_set = [each[16:144, :] for each in data_set['emg']]
-    else:
-        data_set = data_set['emg']
-
-    data_trans = emg_wave_trans(data_set)
-    if for_cnn:
-        data_trans = expand_emg_data(data_trans)
-    return {
-        'type_name': 'emg',
-        'raw': data_set,
-        'trans': data_trans,
-        'append_all': data_trans,
-    }
-
 def wavelet_trans(data):
     data = np.array(data).T  # 转换为 通道 - 时序
     data = pywt.threshold(data, 30, 'hard')  # 阈值滤波
@@ -373,7 +238,7 @@ class DataScaler:
             self.scale_datas = pickle.load(file_)
             file_.close()
             print("curr scalers' type: \n\"%s\"" % str(self.scale_datas.keys()))
-        except FileNotFoundError:
+        except IOError:
             print("cant load scale data, please generated before use")
             return
 
@@ -444,10 +309,6 @@ class DataScaler:
 normalize_scaler = preprocessing.MinMaxScaler()
 normalize_scale_collect = []
 
-def normalize(data, threshold, default_scale):
-    normalize_scaler.fit(data)
-    scale_adjust(threshold, default_scale)
-    return normalize_scaler.transform(data)
 
 """
 maxmin scale = (val - min) / (max - min) 
@@ -460,22 +321,3 @@ min 数组中存的是最小值 乘以scale 数组的值 相当于数据基准�
 在不进行scale时 偏移量应还原成数据自身的偏移量 所以做之前乘法的逆运算 获取原始偏移量
 
 """
-
-def scale_adjust(threshold, default_scale):
-    """
-    根据scale的情况判断是否需要进行scale
-    scale的大小是由这个数据的max - min的得出 如果相差不大 就不进行scale
-    通过修改scale和min的值使其失去scale的作用
-    @:parameter threshold 过滤阈值 当最大最小值之差小于这个阈值 不进行归一化
-    note: scale 的大小是max - min 的倒数
-    """
-    threshold = 1 / threshold
-    default_scale = 1 / default_scale
-    curr_scale = normalize_scaler.scale_
-    curr_min = normalize_scaler.min_
-    for each_val in range(len(curr_scale)):
-        if curr_scale[each_val] > threshold:
-            # 当最大最小值不满足一般数据规律时 设置为默认归一化的scale
-            curr_min[each_val] = curr_min[each_val] * default_scale / curr_scale[each_val]
-            curr_scale[each_val] = default_scale
-

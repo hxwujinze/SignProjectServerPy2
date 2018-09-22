@@ -40,7 +40,7 @@ class SiameseNetwork(nn.Module):
             nn.LeakyReLU(),
             nn.Linear(256, 128),
             nn.LeakyReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(128, 32),
         )
 
         self._initialize_weights()

@@ -9,7 +9,6 @@ import numpy as np
 import queue
 import torch
 import torch.nn.functional as F
-from torch.autograd import Variable
 
 import my_pickle
 from algorithm_models.CNN_model import CNN, get_max_index
@@ -60,12 +59,13 @@ class OnlineRecognizer(threading.Thread):
                 # 分类并检验
                 classify_output = self.cnn_model(data_mat)
                 predict_index = get_max_index(classify_output).item()
-                verify_result, diff = self.verify_model.verify_correctness(data_mat, predict_index)
+                verify_result, diff, threshold = self.verify_model.verify_correctness(data_mat, predict_index)
 
                 return_info = {
                     'index': predict_index,
                     'diff': diff,
-                    'verify_result': str(verify_result)
+                    'verify_result': str(verify_result),
+                    'threshold': threshold
                 }
                 # return all
                 # print(json.dumps(return_info))
@@ -73,7 +73,7 @@ class OnlineRecognizer(threading.Thread):
                 if verify_result:
                     if predict_index != 62:
                         print(json.dumps(return_info))
-                    self.skip_cnt = 6
+                    self.skip_cnt = 7
 
                 # return_info['data'] = new_msg
                 # self.recognize_data_history.append(return_info)
@@ -109,7 +109,6 @@ class VerifyModel:
         self.verify_model = SiameseNetwork(False)
         load_model_param(self.verify_model, 'verify')
         self.verify_model.single_output()
-        self.threshold = 0.3
 
         vector_file_path = os.path.join(CURR_DATA_DIR, 'reference_verify_vector')
         file_ = open(vector_file_path, 'rb')
@@ -121,14 +120,14 @@ class VerifyModel:
         :return: 验证的正误以及 差异程度
         """
         data_vector = self.verify_model(data)
-        reference_vector = np.array([self.reference_vectors[predict_index]])
-        reference_vector = Variable(torch.from_numpy(reference_vector).double())
+        reference_vector = self.reference_vectors[predict_index][0].double()
+        threshold = self.reference_vectors[predict_index][1] + 0.07
         diff = F.pairwise_distance(data_vector, reference_vector)
         diff = torch.squeeze(diff).item()
-        if diff > self.threshold:
-            return False, diff
+        if diff > threshold:
+            return False, diff, threshold
         else:
-            return True, diff
+            return True, diff, threshold
 
 
 '''
@@ -152,7 +151,7 @@ def load_model_param(model, model_name):
 def get_max_index(tensor):
     # print('置信度')
     tensor = F.softmax(tensor, dim=1)
-    print (tensor)
+    # print (tensor)
     tensor = torch.max(tensor, dim=1)[1]
     # 对矩阵延一个固定方向取最大值
     return torch.squeeze(tensor).data.int()
