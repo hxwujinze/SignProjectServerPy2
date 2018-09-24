@@ -63,14 +63,16 @@ data_scaler = process_data.DataScaler(CURR_DATA_DIR)
 """
 
 class RecognizeWorker(multiprocessing.Process):
+    """
+    进行手语识别的进程，该进程负责进行对数据采集过程进行逻辑控制，特征提取
+    """
 
     def __init__(self, message_q,
                  armbands_timetag,
-                 event,
-                 recognize_mode):
+                 event, ):
         multiprocessing.Process.__init__(self, name='RecognizeWorker')
         print('RecognizeWorker created')
-        # 接受识别结果的主线程
+        # 接受识别结果的主线程消息队列
         self.message_q = message_q
         # 已经匹配 要作为识别数据源的手环对象
         print('armbands_list timestamp: ' + str(armbands_manager.connect_time_obj_map))
@@ -78,19 +80,21 @@ class RecognizeWorker(multiprocessing.Process):
         # 手环的identity 使用手环的连接时间tag
         self.paired_armbands = armbands_timetag
 
-        # event用于终止线程
+        # 用于外部告知是否退出识别进程的event
         self.outer_event = event
-        # status用于设置是否进行手语识别工作
-        # set时进行识别 unset时不识别 初始是unset
+        # status用于设置是否进行开始手语一次识别
+        # set时开始 unset时不识别 初始是unset
         self.recognize_status = multiprocessing.Event()
 
-        # 设置识别模式 在线online
-        self.recognize_model = 'online'
-
+        # 进行数据处理，特征提取及向识别算法进程发送数据的线程
         # 无法pickle序列化的类对象的实例化需要在进程的run方法里完成
         # 这里先用None 进行占位
         self.online_recognizer = None
         self.recg_proc = None
+        # 与识别算法进程通信使用的管道
+        self.input_pipe = None
+        self.output_pipe = None
+
 
         # 手环数据采集周期
         self._t_s = 0.01
@@ -100,10 +104,6 @@ class RecognizeWorker(multiprocessing.Process):
         self.ACC_captured_data = np.array([0])
         self.GYR_captured_data = np.array([0])
         self.each_capture_gap = []
-
-        # 与识别进程通信使用的管道
-        self.input_pipe = None
-        self.output_pipe = None
 
 
 
@@ -123,41 +123,48 @@ class RecognizeWorker(multiprocessing.Process):
         self.recognize_status.set()
 
     def stop_recognize(self):
+        """
+        用于外部告知该进程停止一次手语识别
+        :return:
+        """
         self.recognize_status.clear()
 
-
-
     def _stop_recognize(self, stop_type):
+        """
+        用于在进程内部由于某些条件结束一次识别
+        :param stop_type:
+        :return:
+        """
         self.recognize_status.clear()
         # 向主线程发送消息 通知已经停止手语识别了
         msg = Message(control='stop_recognize', data={"type": stop_type})
         self.put_message_into_queue(msg)
 
-    """
-    向主线程消息队列中添加消息的方法 多线程数据访问需要加锁解锁
-    该方法封装了这一过程
-    """
 
     def put_message_into_queue(self, message):
+        """
+        向主线程消息队列中添加消息的方法 多线程数据访问需要加锁解锁
+        该方法封装了这一过程
+        """
         global queue_lock
         queue_lock.acquire(True)
         self.message_q.put(message)
         queue_lock.release()
 
-    """
-    震动两下开始手语识别
-    两下后会有个0.5s的gap 作为人的反应时间 
-    震动一下结束采集
-    """
+
 
     def run(self):
+        """
+        识别控制进程的启动部分，首先通过Popen启动识别算法进程，获取其pipe
+        等待外部消息，开始一次手语识别
+        :return:
+        """
         armbands_timetag = self.paired_armbands
         self.paired_armbands = []
         for each in armbands_timetag:
             self.paired_armbands.append(armbands_manager.connect_time_obj_map[each])
         if self.recg_proc is None:
-            self.input_pipe, self.output_pipe, err_pipe, self.recg_proc = \
-                generate_recognize_subprocces()
+            self.input_pipe, self.output_pipe, err_pipe, self.recg_proc = generate_recognize_subprocces()
             # 错误子进程监听线程 当出现错误时 print到主进程上
             err_printer = ErrorOutputListener(self.outer_event, err_pipe)
             err_printer.start()
@@ -182,6 +189,10 @@ class RecognizeWorker(multiprocessing.Process):
 
     # 在线识别 一边采集一边识别
     def online_recognize(self):
+        """
+        手语识别数据采集loop
+        采集数据及扫描外部消息
+        """
         self.get_right_armband_obj().vibrate(VibrationType.short)
         time.sleep(0.15)
         print("online recognize start at: %s" % time.clock())
@@ -196,6 +207,7 @@ class RecognizeWorker(multiprocessing.Process):
             current_time = time.clock()
             gap_time = current_time - cap_start_time
             if gap_time >= self._t_s:
+                # 在固定时间间隔下不断获取数据 放入数据处理模块的缓冲区
                 myo_obj = self.get_right_armband_obj().myo_obj
                 emg_data = tuple(myo_obj.emg)
                 acc_data = list(myo_obj.acceleration)
@@ -207,7 +219,7 @@ class RecognizeWorker(multiprocessing.Process):
                 # it's necessary that give every sufficient thread sleep
                 # if it doesn't need to work
 
-        # debug 结束一次采集后  将历史数据保存起来
+        # 结束一次采集后  将历史数据保存起来
         # self.online_recognizer.data_processor.store_raw_history_data()
         self.online_recognizer.stop_recognize()
         print("online recognize end at: %s" % time.clock())
@@ -222,11 +234,18 @@ class RecognizeWorker(multiprocessing.Process):
 
 
 class OnlineRecognizer:
+    """
+    在线识别逻辑
+    内部维护一个缓冲区、滑动窗口处理输入数据，将数据送入特征提取模块
+    持有数据处理模块和识别结果接受模块的线程，控制整个识别的过程pipeline与外部交互的过程
+    """
     SEG_SIZE = 128
 
     def __init__(self, message_q, pipe_input, pipe_output):
+        # 外部消息队列，用于将识别结果返回
         self.outer_msg_queue = message_q
         self.timer_queue = Queue.Queue()
+        # 识别算法进程的输入输出pipe
         self.pipe_input = pipe_input
         self.pipe_output = pipe_output
         # 停止工作标记 set之后退出线程
@@ -277,6 +296,10 @@ class OnlineRecognizer:
             self.clean_buffer()  # 传递完成后将步进数据缓冲区重置
 
     def clean_buffer(self):
+        """
+        清空当前步长的的数据，并获取下一步长的数据
+        :return:
+        """
         self.step_win_end = random.randint(9, 20)
         # 随机值的窗口步进 避免数据阻塞 也能一定程度提高分辨率
         self.step_win_start = 0
@@ -286,20 +309,19 @@ class OnlineRecognizer:
         self.stop_flag.clear()
 
 class DataProcessor(threading.Thread):
+    """
+    数据处理进程
+    接受来自OnlineRecognizer传入的窗口数据，对数据进行处理并输入识别线程
+    """
     def __init__(self, input_pipe, output_pipe, stop_flag, timer_queue):
         threading.Thread.__init__(self,
                                   name='data_processor', )
+
         self.new_data_queue = Queue.Queue()
         self.timer_queue = timer_queue
         self.stop_flag = stop_flag
         self.input_pipe = input_pipe
         self.output_pipe = output_pipe
-
-        self.normalized_data_buffer = {
-            'acc': None,
-            'gyr': None,
-            #    不需要normalize emg数据 直接使用raw 即可
-        }
 
         self.raw_data_buffer = {
             'acc': None,
@@ -313,6 +335,10 @@ class DataProcessor(threading.Thread):
 
 
     def run(self):
+        """
+        扫描输入序列，满足窗口长度就进行数据数据处理及特征提取
+        :return:
+        """
         while not self.stop_flag.isSet():
             time.sleep(0.01)
             while not self.new_data_queue.empty():
@@ -332,6 +358,10 @@ class DataProcessor(threading.Thread):
         return
 
     def append_raw_data(self):
+        """
+        接受每个step的数据 加入缓冲区
+        :return:
+        """
         new_seg_data = self.new_data_queue.get()
         type_list = ['acc', 'gyr', 'emg']
         for each_type_index in range(len(type_list)):
@@ -341,6 +371,10 @@ class DataProcessor(threading.Thread):
             else:
                 self.raw_data_buffer[each_type_name] = \
                     np.vstack((self.raw_data_buffer[each_type_name], new_seg_data[each_type_index]))
+        if len(self.raw_data_buffer['acc']) > 1000:
+            for each_type_name in type_list:
+                self.raw_data_buffer[each_type_name] = self.raw_data_buffer[each_type_name][700:]
+            self.end_ptr -= 500
         self.end_ptr += len(new_seg_data[0])  # 更新buffer长度
 
 
@@ -354,6 +388,13 @@ class DataProcessor(threading.Thread):
 
     @staticmethod
     def create_data_seg(acc_data, gyr_data, emg_data):
+        """
+        特征提取并归一化
+        :param acc_data:
+        :param gyr_data:
+        :param emg_data:
+        :return:
+        """
         acc_data = np.array(acc_data)
         gyr_data = np.array(gyr_data)
         emg_data = np.array(emg_data)
@@ -370,6 +411,11 @@ class DataProcessor(threading.Thread):
         return np.array(data_mat)
 
     def _send_to_recognize_process(self, data_mat):
+        """
+        序列化后发送至识别算法进程
+        :param data_mat:
+        :return:
+        """
         data_pickle_str = my_pickle.dumps(data_mat)
         # print data_pickle_str + '\n\n'
         self.input_pipe.write(data_pickle_str + '\n')
@@ -486,6 +532,10 @@ def vstack_data(target, step_data):
     return target
 
 def generate_recognize_subprocces():
+    """
+    使用Popen启动培python3识别进程，建立用于通讯的pipe
+    :return:
+    """
     # init recognize process
     target_python_dir = PYTORCH_INTP_PATH
     target_script_dir = CURR_WORK_DIR + '\\recognize_long_run.py'

@@ -68,7 +68,6 @@ def feature_extract_single_polyfit(data, compress):
 
 
 
-
 def append_single_data_feature(acc_data, gyr_data, emg_data):
     batch_mat = np.zeros(len(acc_data))
     is_first = True
@@ -103,48 +102,9 @@ def wavelet_trans(data):
 
     # 转换为 时序-通道 追加一个零点在转换回 通道-时序
     data = pywt.threshold(data, 15, 'hard')  # 再次阈值滤波
-    normalize_scaler.fit(data)
-    data = normalize_scaler.transform(data)
-    data = eliminate_zero_shift(data)  # 消除零点漂移
     data = np.abs(data)  # 反转
     return data  # 转换为 时序-通道 便于rnn输入
 
-def emg_wave_trans(data_set):
-    res_list = []
-    for each_cap in data_set:
-        cap = wavelet_trans(each_cap)
-        res_list.append(cap)
-    return res_list
-
-def eliminate_zero_shift(data):
-    zero_point = []
-    for each_chanel in range(len(data[0])):
-        count_dic = {}
-        for each_cap in range(len(data)):
-            if count_dic.get(data[each_cap][each_chanel]) is None:
-                count_dic[data[each_cap][each_chanel]] = 1
-            else:
-                count_dic[data[each_cap][each_chanel]] += 1
-        max_occr = 0
-        value = 0
-        for each_value in count_dic.keys():
-            if max_occr < count_dic[each_value]:
-                max_occr = count_dic[each_value]
-                value = each_value
-        if max_occr > 1:
-            zero_point.append(value)
-        else:
-            zero_point.append(0)
-    zero_point = np.array(zero_point)
-    data -= zero_point
-    return data
-
-def expand_emg_data(data):
-    expnded = []
-    for each_data in data:
-        each_data_expand = expand_emg_data_single(each_data)
-        expnded.append(np.array(each_data_expand))
-    return expnded
 
 def expand_emg_data_single(data):
     expanded_data = None
@@ -304,10 +264,6 @@ class DataScaler:
             divid = [(0, 3), (3, 6), (6, 11)]
             self.split_scale_vector(parent_feat_names, child_feat_names, divid)
 
-
-
-normalize_scaler = preprocessing.MinMaxScaler()
-normalize_scale_collect = []
 
 
 """

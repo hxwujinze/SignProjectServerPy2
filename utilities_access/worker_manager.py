@@ -133,8 +133,7 @@ class MainWorkerThread(threading.Thread):
 
         self.recognize_process = RecognizeWorker(self.message_q,
                                                  armbands_tags,
-                                                 self.recognize_event,
-                                                 self.recognize_mode)
+                                                 self.recognize_event, )
         self.recognize_process.daemon = True
         self.recognize_process.start()
         # 进入工作线程的主循环 扫描消息队列
@@ -276,15 +275,6 @@ class MainWorkerThread(threading.Thread):
         print("recognize stopped ")
         self.put_message_into_queue(msg)
 
-    def switch_recognize_model(self, data):
-        """
-        切换识别模式 在线 or 离线
-        :param data: data 的 mode 字段存有 online 或offline
-        """
-        if data['mode'] == 'online':
-            self.recognize_mode.set()
-        else:
-            self.recognize_mode.clear()
 
     task_maping = {
         'send_msg': send_message,
@@ -295,7 +285,6 @@ class MainWorkerThread(threading.Thread):
         # 追加手语识别结果
         'stop_recognize': stop_recognize,
         # 停止手语识别
-        'switch_recognize_mode': switch_recognize_model,
     }
 
     @staticmethod
