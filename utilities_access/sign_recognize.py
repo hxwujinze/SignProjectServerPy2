@@ -371,10 +371,10 @@ class DataProcessor(threading.Thread):
             else:
                 self.raw_data_buffer[each_type_name] = \
                     np.vstack((self.raw_data_buffer[each_type_name], new_seg_data[each_type_index]))
-        if len(self.raw_data_buffer['acc']) > 1000:
-            for each_type_name in type_list:
-                self.raw_data_buffer[each_type_name] = self.raw_data_buffer[each_type_name][700:]
-            self.end_ptr -= 500
+        # if len(self.raw_data_buffer['acc']) > 1000:
+        #     for each_type_name in type_list:
+        #         self.raw_data_buffer[each_type_name] = self.raw_data_buffer[each_type_name][700:]
+        #     self.end_ptr -= 700
         self.end_ptr += len(new_seg_data[0])  # 更新buffer长度
 
 
@@ -406,8 +406,8 @@ class DataProcessor(threading.Thread):
         data_mat = process_data.append_single_data_feature(acc_data=acc_data,
                                                            gyr_data=gyr_data,
                                                            emg_data=emg_data)
-        data_mat = data_scaler.normalize(data_mat, 'cnn')
-        data_mat = np.where(data_mat > 0.0000000001, data_mat, 0)
+        data_mat = data_scaler.normalize(data_mat, scale_type='minmax', data_type='all')
+        data_mat = np.where(abs(data_mat) > 0.0000000001, data_mat, 0)
         return np.array(data_mat)
 
     def _send_to_recognize_process(self, data_mat):

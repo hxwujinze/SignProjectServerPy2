@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 
 import my_pickle
-from algorithm_models.CNN_model import CNN, get_max_index
+from algorithm_models.classify_model import CNN, get_max_index
 from algorithm_models.verify_model import SiameseNetwork
 
 CURR_WORK_DIR = os.path.dirname(__file__)
@@ -121,7 +121,7 @@ class VerifyModel:
         """
         data_vector = self.verify_model(data)
         reference_vector = self.reference_vectors[predict_index][0].double()
-        threshold = self.reference_vectors[predict_index][1] + 0.07
+        threshold = self.reference_vectors[predict_index][1] + 0.08
         diff = F.pairwise_distance(data_vector, reference_vector)
         diff = torch.squeeze(diff).item()
         if diff > threshold:

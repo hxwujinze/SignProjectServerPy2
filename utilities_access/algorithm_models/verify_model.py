@@ -13,10 +13,12 @@ from .make_VGG import make_vgg
 # Lout=floor((Lin+2∗padding−dilation∗(kernel_size−1)−1)/stride+1)
 
 
+nn.LSTM
+
 WEIGHT_DECAY = 0.00001
 BATCH_SIZE = 128
 LEARNING_RATE = 0.0003
-EPOCH = 90
+EPOCH = 160
 
 class SiameseNetwork(nn.Module):
     def __init__(self, train=True):
@@ -226,7 +228,6 @@ class WeightSamplingLayer:
         # execute sampling
         return self.sampling(init_vectors, weights)
         # return triplets
-
     @staticmethod
     def L2Normalize(data):
         data = data.numpy()
